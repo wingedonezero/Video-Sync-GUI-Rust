@@ -1,3 +1,4 @@
+#[derive(Debug, Clone)]
 pub struct Plan {
     pub global_shift_ms: i32,
     pub secondary_ms: i32,
@@ -15,6 +16,14 @@ pub fn build_plan(sec: Option<i32>, ter: Option<i32>) -> Plan {
         secondary_ms: sec.unwrap_or(0),
         tertiary_ms: ter.unwrap_or(0),
     }
+}
+
+pub fn adjusted_delays(p: &Plan) -> (i32, i32, i32) {
+    // Return (ref_ms, sec_ms, ter_ms) after applying global_shift so all are >= 0.
+    let ref_ms = p.global_shift_ms; // reference video shifts to anchor
+    let sec_ms = p.secondary_ms + p.global_shift_ms;
+    let ter_ms = p.tertiary_ms + p.global_shift_ms;
+    (ref_ms, sec_ms, ter_ms)
 }
 
 pub fn summarize_plan(p: &Plan) -> String {
