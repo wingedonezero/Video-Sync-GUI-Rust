@@ -1,317 +1,347 @@
+// crates/vsg-cli/src/mux.rs
+// Extract → Assemble → Merge pipeline, mirroring the Python behavior.
+// Notes:
+// - Only REF video is kept from container; everything else is extracted to elementary streams.
+// - Final order: REF video -> SEC English audio (first default) -> REF audio -> SEC subs -> TER subs -> TER attachments.
+// - Delays are applied to SEC/TER audio via --sync 0:<ms> (add-never-subtract convention).
 
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
+use anyhow::{anyhow, Context, Result};
+use clap::Args;
+use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
 
-use clap::Parser;
-
-#[derive(Parser, Debug)]
-pub struct MuxCmd {
-    /// Reference (video kept; audio also extracted)
+#[derive(Args, Debug)]
+pub struct MuxArgs {
+    /// Reference input MKV (video source; also audio/subs get extracted from here)
     #[arg(long)]
     pub reference: PathBuf,
-    /// Secondary (extract ENG audio + all subs)
+    /// Secondary input MKV (eng audio + subs will be extracted)
     #[arg(long)]
     pub secondary: Option<PathBuf>,
-    /// Tertiary (extract subs + attachments)
+    /// Tertiary input MKV (subs + attachments will be extracted)
     #[arg(long)]
     pub tertiary: Option<PathBuf>,
-    /// Output MKV
+    /// Output MKV file path
     #[arg(long)]
     pub output: PathBuf,
-    /// Secondary raw delay (ms)
+    /// Secondary raw delay in ms (add-never-subtract convention)
     #[arg(long, default_value_t = 0)]
-    pub sec_delay: i64,
-    /// Tertiary raw delay (ms)
+    pub sec_delay: i32,
+    /// Tertiary raw delay in ms (add-never-subtract convention)
     #[arg(long, default_value_t = 0)]
-    pub ter_delay: i64,
-    /// mkvmerge path
+    pub ter_delay: i32,
+    /// Optional mkvmerge path (default: mkvmerge in PATH)
     #[arg(long, default_value = "mkvmerge")]
     pub mkvmerge: String,
-    /// mkvextract path
+    /// Optional mkvextract path (default: mkvextract in PATH)
     #[arg(long, default_value = "mkvextract")]
     pub mkvextract: String,
-    /// Keep option file here (if provided, staging not removed)
+    /// Optional path to write the constructed @opts.json; if omitted, written into temp/ and removed with temp.
     #[arg(long)]
     pub out_opts: Option<PathBuf>,
-    /// Prefer language for SEC audio (eng by default)
+    /// Preferred language for secondary audio (default: eng)
     #[arg(long, default_value = "eng")]
     pub prefer_lang: String,
-    /// Regex to detect Signs/Songs (for default sub)
+    /// Regex to detect Signs/Songs subtitle tracks for default flag
     #[arg(long, default_value = "(?i)sign|song")]
     pub signs_pattern: String,
-    /// Optional staging root; defaults to <exe_dir>/temp
-    #[arg(long)]
-    pub staging_root: Option<PathBuf>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct Track {
-    id: u32,
+    id: i64,
     #[serde(rename = "type")]
     kind: String,
-    properties: TrackProps,
     codec: Option<String>,
+    properties: Option<TrackProps>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct TrackProps {
     language: Option<String>,
     track_name: Option<String>,
 }
 
-fn run(cmd: &mut Command) -> anyhow::Result<String> {
-    let out = cmd.output()?;
+#[derive(Debug, Clone, Deserialize)]
+struct MkvmergeJson {
+    tracks: Vec<Track>,
+    attachments: Option<Vec<Attachment>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct Attachment {
+    id: i64,
+    file_name: Option<String>,
+    mime_type: Option<String>,
+}
+
+fn run_and_capture(bin: &str, args: &[&str]) -> Result<String> {
+    let out = Command::new(bin).args(args).stdout(Stdio::piped()).stderr(Stdio::piped()).output()?;
     if !out.status.success() {
-        anyhow::bail!("Process failed: {:?} (code {:?})", cmd, out.status.code());
+        let s = String::from_utf8_lossy(&out.stderr);
+        return Err(anyhow!("Process failed: {} {:?}\n{}", bin, args, s));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
 
-fn probe_tracks(mkvmerge: &str, path: &Path) -> anyhow::Result<Vec<Track>> {
-    let txt = run(Command::new(mkvmerge).arg("-J").arg(path))?;
-    let v: Value = serde_json::from_str(&txt)?;
-    let arr = v.get("tracks").and_then(|x| x.as_array()).cloned().unwrap_or_default();
-    let mut out = Vec::new();
-    for t in arr {
-        let tr: Track = serde_json::from_value(t)?;
-        out.push(tr);
-    }
-    Ok(out)
+fn probe(mkvmerge: &str, path: &Path) -> Result<MkvmergeJson> {
+    let txt = run_and_capture(mkvmerge, &["-J", path.to_str().unwrap()])?;
+    let v: MkvmergeJson = serde_json::from_str(&txt).context("Failed to parse mkvmerge -J JSON")?;
+    Ok(v)
 }
 
-fn ext_for(kind: &str, codec: &Option<String>) -> &'static str {
+fn ensure_dir(p: &Path) -> Result<()> {
+    fs::create_dir_all(p).with_context(|| format!("create_dir_all {:?}", p))?;
+    Ok(())
+}
+
+fn ext_for_codec(codec: &str, kind: &str) -> &'static str {
     match kind {
-        "audio" => {
-            if let Some(c) = codec {
-                let lc = c.to_lowercase();
-                if lc.contains("truehd") { return "thd"; }
-                if lc.contains("ac-3") || lc.contains("ac3") { return "ac3"; }
-                if lc.contains("aac") { return "aac"; }
-                if lc.contains("pcm") { return "wav"; }
-                if lc.contains("dts") { return "dts"; }
-            }
-            "mka"
-        }
         "subtitles" => {
-            if let Some(c) = codec {
-                let lc = c.to_lowercase();
-                if lc.contains("pgs") { return "sup"; }
-                if lc.contains("ass") { return "ass"; }
-                if lc.contains("srt") { return "srt"; }
-            }
-            "sub"
+            if codec.to_lowercase().contains("pgs") { "sup" }
+            else if codec.to_lowercase().contains("subrip") { "srt" }
+            else { "ass" } // default to ass
+        }
+        "audio" => {
+            let c = codec.to_lowercase();
+            if c.contains("truehd") { "thd" }
+            else if c.contains("dts") { "dts" }
+            else if c.contains("ac-3") || c.contains("e-ac-3") || c.contains("ac3") { "ac3" }
+            else if c.contains("aac") { "aac" }
+            else if c.contains("pcm") || c.contains("wav") { "wav" }
+            else { "mka" }
         }
         _ => "bin"
     }
 }
 
-fn extract_tracks(mkvextract: &str, src: &Path, tracks: &[(u32, &str, &Option<String>)], out_dir: &Path, tag: &str) -> anyhow::Result<Vec<PathBuf>> {
-    if tracks.is_empty() { return Ok(vec![]); }
-    fs::create_dir_all(out_dir)?;
-    // Build mkvextract command: mkvextract tracks input.mkv id:file id:file ...
-    let mut args = Vec::new();
-    args.push("tracks".to_string());
-    args.push(src.to_string_lossy().to_string());
-    let mut outs = Vec::new();
-    for (tid, kind, codec) in tracks {
-        let ext = ext_for(kind, codec);
-        let file = out_dir.join(format!("{}_{}_t{:02}.{}", tag, &kind[..3].to_uppercase(), tid, ext));
-        args.push(format!("{}:{}", tid, file.to_string_lossy()));
-        outs.push(file);
+fn mkvextract_tracks(mkvextract: &str, src: &Path, mappings: &[(i64, PathBuf)]) -> Result<()> {
+    if mappings.is_empty() { return Ok(()); }
+    let mut args: Vec<String> = vec!["tracks".to_string(), src.to_string_lossy().to_string()];
+    for (id, out) in mappings {
+        args.push(format!("{}:{}", id, out.to_string_lossy()));
     }
-    let status = Command::new(mkvextract).args(args).status()?;
-    if !status.success() {
-        anyhow::bail!("mkvextract failed on {}", src.display());
-    }
-    Ok(outs)
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_and_capture(mkvextract, &args_ref)?;
+    Ok(())
 }
 
-fn extract_attachments(mkvextract: &str, src: &Path, ids: &[u32], out_dir: &Path) -> anyhow::Result<Vec<PathBuf>> {
-    if ids.is_empty() { return Ok(vec![]); }
-    fs::create_dir_all(out_dir)?;
-    // mkvextract attachments input.mkv id:name ...
-    // We don't know names—mkvextract will use original names if omitted, but require id:name.
-    let mut files = Vec::new();
-    for id in ids {
-        let name = format!("TER_attach_{:02}", id);
-        let out = out_dir.join(&name);
-        let status = Command::new(mkvextract)
-            .arg("attachments").arg(src)
-            .arg(format!("{}:{}", id, out.to_string_lossy()))
-            .status()?;
-        if !status.success() {
-            anyhow::bail!("mkvextract attachments failed on {}", src.display());
+fn mkvextract_attachments(mkvextract: &str, src: &Path, mappings: &[(i64, PathBuf)]) -> Result<()> {
+    if mappings.is_empty() { return Ok(()); }
+    let mut args: Vec<String> = vec!["attachments".to_string(), src.to_string_lossy().to_string()];
+    for (id, out) in mappings {
+        args.push(format!("{}:{}", id, out.to_string_lossy()));
+    }
+    let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_and_capture(mkvextract, &args_ref)?;
+    Ok(())
+}
+
+fn mkvextract_chapters(mkvextract: &str, src: &Path, out: &Path) -> Result<()> {
+    run_and_capture(mkvextract, &["chapters", src.to_str().unwrap(), out.to_str().unwrap()])?;
+    Ok(())
+}
+
+fn is_eng(lang_opt: &Option<String>, prefer: &str) -> bool {
+    let lang = lang_opt.as_deref().unwrap_or("").to_lowercase();
+    let prefer = prefer.to_lowercase();
+    lang == "en" || lang == "eng" || lang == prefer
+}
+
+pub fn mux(args: &MuxArgs) -> Result<()> {
+    // staging dirs
+    let temp_dir = PathBuf::from("temp");
+    ensure_dir(&temp_dir)?;
+    let out_dir = PathBuf::from("output");
+    ensure_dir(&out_dir)?;
+
+    // Probe all present inputs
+    let ref_info = probe(&args.mkvmerge, &args.reference).context("probe REF")?;
+    let sec_info = if let Some(p) = &args.secondary { Some(probe(&args.mkvmerge, p).context("probe SEC")?) } else { None };
+    let ter_info = if let Some(p) = &args.tertiary { Some(probe(&args.mkvmerge, p).context("probe TER")?) } else { None };
+
+    // Build extraction lists
+    let mut ref_audio_maps: Vec<(i64, PathBuf)> = vec![];
+    let mut ref_sub_maps: Vec<(i64, PathBuf)> = vec![];
+    let mut sec_eng_audio_maps: Vec<(i64, PathBuf)> = vec![];
+    let mut sec_sub_maps: Vec<(i64, PathBuf)> = vec![];
+    let mut ter_sub_maps: Vec<(i64, PathBuf)> = vec![];
+    let mut ter_att_maps: Vec<(i64, PathBuf)> = vec![];
+
+    // REF audio+subs
+    for t in &ref_info.tracks {
+        match t.kind.as_str() {
+            "audio" => {
+                let ext = ext_for_codec(t.codec.as_deref().unwrap_or(""), "audio");
+                let out = temp_dir.join(format!("REF_a{}_{}.{}", t.id, t.properties.as_ref().and_then(|p| p.language.clone()).unwrap_or("und".to_string()), ext));
+                ref_audio_maps.push((t.id, out));
+            }
+            "subtitles" => {
+                let ext = ext_for_codec(t.codec.as_deref().unwrap_or(""), "subtitles");
+                let out = temp_dir.join(format!("REF_s{}_{}.{}", t.id, t.properties.as_ref().and_then(|p| p.language.clone()).unwrap_or("und".to_string()), ext));
+                ref_sub_maps.push((t.id, out));
+            }
+            _ => {}
         }
-        files.push(out);
-    }
-    Ok(files)
-}
-
-pub fn run_mux(cmd: MuxCmd) -> anyhow::Result<()> {
-    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|x| x.to_path_buf())).unwrap_or_else(|| PathBuf::from("."));
-    let staging_root = cmd.staging_root.unwrap_or_else(|| exe_dir.join("temp"));
-    fs::create_dir_all(&staging_root)?;
-    let keep_staging = cmd.out_opts.is_some();
-
-    let ref_tracks = probe_tracks(&cmd.mkvmerge, &cmd.reference)?;
-    let sec_tracks = if let Some(sec) = &cmd.secondary {
-        probe_tracks(&cmd.mkvmerge, sec)?
-    } else { vec![] };
-    let ter_tracks = if let Some(ter) = &cmd.tertiary {
-        probe_tracks(&cmd.mkvmerge, ter)?
-    } else { vec![] };
-
-    // Identify
-    let ref_vid: Vec<_> = ref_tracks.iter().filter(|t| t.kind=="video").collect();
-    let ref_aud: Vec<_> = ref_tracks.iter().filter(|t| t.kind=="audio").collect();
-    let ref_sub: Vec<_> = ref_tracks.iter().filter(|t| t.kind=="subtitles").collect();
-
-    let pref = cmd.prefer_lang.to_lowercase();
-    let sec_aud: Vec<_> = sec_tracks.iter().filter(|t| t.kind=="audio" && t.properties.language.as_deref().map(|x| x.to_lowercase()).map(|x| x=="eng" || x=="en" || x==pref).unwrap_or(false)).collect();
-    let sec_sub: Vec<_> = sec_tracks.iter().filter(|t| t.kind=="subtitles").collect();
-
-    let ter_sub: Vec<_> = ter_tracks.iter().filter(|t| t.kind=="subtitles").collect();
-    let ter_attach_ids: Vec<u32> = {
-        // mkvmerge -J has "attachments" separate
-        let txt = run(Command::new(&cmd.mkvmerge).arg("-J").arg(cmd.tertiary.as_ref().unwrap_or(&cmd.reference)))?;
-        let v: Value = serde_json::from_str(&txt)?;
-        v.get("attachments")
-            .and_then(|a| a.as_array())
-            .map(|arr| arr.iter().filter_map(|x| x.get("id").and_then(|i| i.as_u64()).map(|u| u as u32)).collect())
-            .unwrap_or_else(|| vec![])
-    };
-
-    // Extract chapters from REF
-    let chapters_xml = staging_root.join("REF_chapters.xml");
-    let ch_status = Command::new(&cmd.mkvextract)
-        .arg("chapters").arg(&cmd.reference)
-        .arg("-s").arg(chapters_xml.to_string_lossy().to_string())
-        .status()?;
-    if !ch_status.success() {
-        // continue without chapters
     }
 
-    // Extract REF audio + subs so we can order deterministically
-    let ref_aud_files = extract_tracks(&cmd.mkvextract, &cmd.reference,
-        &ref_aud.iter().map(|t| (t.id, t.kind.as_str(), &t.codec)).collect::<Vec<_>>(),
-        &staging_root, "REF")?;
-    let ref_sub_files = extract_tracks(&cmd.mkvextract, &cmd.reference,
-        &ref_sub.iter().map(|t| (t.id, t.kind.as_str(), &t.codec)).collect::<Vec<_>>(),
-        &staging_root, "REF")?;
+    // SEC eng audio + all subs
+    if let (Some(sec_path), Some(s)) = (&args.secondary, &sec_info) {
+        for t in &s.tracks {
+            match t.kind.as_str() {
+                "audio" => {
+                    if is_eng(&t.properties.as_ref().and_then(|p| p.language.clone()), &args.prefer_lang) {
+                        let ext = ext_for_codec(t.codec.as_deref().unwrap_or(""), "audio");
+                        let out = temp_dir.join(format!("SEC_a{}_{}.{}", t.id, t.properties.as_ref().and_then(|p| p.language.clone()).unwrap_or("eng".to_string()), ext));
+                        sec_eng_audio_maps.push((t.id, out));
+                    }
+                }
+                "subtitles" => {
+                    let ext = ext_for_codec(t.codec.as_deref().unwrap_or(""), "subtitles");
+                    let out = temp_dir.join(format!("SEC_s{}_{}.{}", t.id, t.properties.as_ref().and_then(|p| p.language.clone()).unwrap_or("und".to_string()), ext));
+                    sec_sub_maps.push((t.id, out));
+                }
+                _ => {}
+            }
+        }
+        // extract sec tracks
+        mkvextract_tracks(&args.mkvextract, sec_path, &sec_eng_audio_maps)?;
+        mkvextract_tracks(&args.mkvextract, sec_path, &sec_sub_maps)?;
+    }
 
-    // Extract SEC ENG audio + all subs
-    let sec_aud_files = if let Some(sec) = &cmd.secondary {
-        extract_tracks(&cmd.mkvextract, sec,
-            &sec_aud.iter().map(|t| (t.id, t.kind.as_str(), &t.codec)).collect::<Vec<_>>(),
-            &staging_root, "SEC")?
-    } else { vec![] };
-    let sec_sub_files = if let Some(sec) = &cmd.secondary {
-        extract_tracks(&cmd.mkvextract, sec,
-            &sec_sub.iter().map(|t| (t.id, t.kind.as_str(), &t.codec)).collect::<Vec<_>>(),
-            &staging_root, "SEC")?
-    } else { vec![] };
+    // TER subs + attachments
+    if let (Some(ter_path), Some(t)) = (&args.tertiary, &ter_info) {
+        for tr in &t.tracks {
+            if tr.kind == "subtitles" {
+                let ext = ext_for_codec(tr.codec.as_deref().unwrap_or(""), "subtitles");
+                let out = temp_dir.join(format!("TER_s{}_{}.{}", tr.id, tr.properties.as_ref().and_then(|p| p.language.clone()).unwrap_or("und".to_string()), ext));
+                ter_sub_maps.push((tr.id, out));
+            }
+        }
+        if let Some(atts) = &t.attachments {
+            for att in atts {
+                let name = att.file_name.clone().unwrap_or(format!("att{}.bin", att.id));
+                let out = temp_dir.join(format!("TER_att{}_{}", att.id, name));
+                ter_att_maps.push((att.id, out));
+            }
+        }
+        // extract TER
+        mkvextract_tracks(&args.mkvextract, ter_path, &ter_sub_maps)?;
+        mkvextract_attachments(&args.mkvextract, ter_path, &ter_att_maps)?;
+    }
 
-    // Extract TER subs & attachments
-    let ter_sub_files = if let Some(ter) = &cmd.tertiary {
-        extract_tracks(&cmd.mkvextract, ter,
-            &ter_sub.iter().map(|t| (t.id, t.kind.as_str(), &t.codec)).collect::<Vec<_>>(),
-            &staging_root, "TER")?
-    } else { vec![] };
-    let ter_attach_files = if let Some(ter) = &cmd.tertiary {
-        extract_attachments(&cmd.mkvextract, ter, &ter_attach_ids, &staging_root)?
-    } else { vec![] };
+    // REF: extract chapters + audio+subs (not video)
+    let ref_chapters = temp_dir.join("REF_chapters.xml");
+    mkvextract_chapters(&args.mkvextract, &args.reference, &ref_chapters).ok(); // chapters may be absent
+    mkvextract_tracks(&args.mkvextract, &args.reference, &ref_audio_maps)?;
+    mkvextract_tracks(&args.mkvextract, &args.reference, &ref_sub_maps)?;
 
-    // Build @opts argv
+    // Build @opts.json (argv array)
     let mut argv: Vec<String> = Vec::new();
     argv.push("--output".into());
-    argv.push(cmd.output.to_string_lossy().to_string());
+    argv.push(args.output.to_string_lossy().into_owned());
 
-    if chapters_xml.exists() {
+    // chapters if present
+    if ref_chapters.exists() {
         argv.push("--chapters".into());
-        argv.push(chapters_xml.to_string_lossy().to_string());
+        argv.push(ref_chapters.to_string_lossy().into_owned());
     }
 
-    // 1) REF video only (suppress audio/subs from container)
+    // ( REF video only ) by suppressing audio/subs on the container
+    argv.push("(".into());
+    argv.push(args.reference.to_string_lossy().into_owned());
+    argv.push(")".into());
     argv.push("--no-audio".into());
     argv.push("--no-subtitles".into());
-    argv.push("(".into());
-    argv.push(cmd.reference.to_string_lossy().to_string());
-    argv.push(")".into());
 
-    // helper to add single-track file with flags
-    let mut track_order: Vec<(usize, usize)> = Vec::new();
-    let mut file_index = 1usize; // ref video container is 0
-
-    let mut add_track = |file: &Path, lang: Option<&str>, default_yes: bool, sync_ms: i64| {
-        argv.push("--compression".into()); argv.push("0:none".into());
-        if let Some(l) = lang {
-            argv.push("--language".into()); argv.push(format!("0:{}", l));
+    // helper to append a single-track elementary stream with flags
+    let mut add_track = |path: &Path, lang: &str, default_yes: bool, sync_ms: Option<i32>| {
+        argv.push("(".into());
+        argv.push(path.to_string_lossy().into_owned());
+        argv.push(")".into());
+        argv.push("--language".into());
+        argv.push(format!("0:{}", lang));
+        argv.push("--compression".into());
+        argv.push("0:none".into());
+        if let Some(ms) = sync_ms {
+            if ms != 0 {
+                argv.push("--sync".into());
+                argv.push(format!("0:{}", ms));
+            }
         }
-        argv.push("--default-track-flag".into()); argv.push(format!("0:{}", if default_yes {"yes"} else {"no"}));
-        if sync_ms != 0 {
-            argv.push("--sync".into()); argv.push(format!("0:{}", sync_ms));
+        if default_yes {
+            argv.push("--default-track-flag".into());
+            argv.push("0:yes".into());
+        } else {
+            argv.push("--default-track-flag".into());
+            argv.push("0:no".into());
         }
-        argv.push("(".into()); argv.push(file.to_string_lossy().to_string()); argv.push(")".into());
-        track_order.push((file_index, 0));
-        file_index += 1;
     };
 
-    // 2) SEC English audio (first default)
-    for (i, f) in sec_aud_files.iter().enumerate() {
-        let def = i==0;
-        add_track(f, Some("eng"), def, cmd.sec_delay);
+    // 1) SEC English audio (first default=yes) with sec delay
+    let mut first_audio_done = false;
+    for (_id, path) in &sec_eng_audio_maps {
+        let lang = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").split('_').nth(2).unwrap_or("eng");
+        add_track(path, lang, !first_audio_done, Some(args.sec_delay));
+        if !first_audio_done { first_audio_done = true; }
     }
 
-    // 3) REF audio
-    for f in &ref_aud_files {
-        add_track(f, None, false, 0);
+    // 2) REF audio (no defaults, no delay)
+    for (_id, path) in &ref_audio_maps {
+        let lang = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").split('_').nth(2).unwrap_or("und");
+        add_track(path, lang, false, None);
     }
 
-    // 4) SEC subs
-    for f in &sec_sub_files {
-        add_track(f, None, false, 0);
+    // Decide signs pattern regex
+    let signs_re = Regex::new(&args.signs_pattern).unwrap_or(Regex::new("(?i)sign|song").unwrap());
+
+    // 3) SEC subs (default to yes if filename matches signs)
+    for (_id, path) in &sec_sub_maps {
+        let lang = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").split('_').nth(2).unwrap_or("und");
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let is_signs = signs_re.is_match(name);
+        add_track(path, lang, is_signs, None);
     }
 
-    // 5) TER subs (apply ter delay; basic signs default detection by file name)
-    for f in &ter_sub_files {
-        let fname = f.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        let def = regex::Regex::new(&cmd.signs_pattern).ok().map(|re| re.is_match(fname)).unwrap_or(false);
-        add_track(f, None, def, cmd.ter_delay);
+    // 4) TER subs (similar default detection)
+    for (_id, path) in &ter_sub_maps {
+        let lang = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").split('_').nth(2).unwrap_or("und");
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        let is_signs = signs_re.is_match(name);
+        add_track(path, lang, is_signs, Some(args.ter_delay));
     }
 
-    // 6) TER attachments
-    for a in &ter_attach_files {
+    // 5) TER attachments
+    for (_id, path) in &ter_att_maps {
         argv.push("--attach-file".into());
-        argv.push(a.to_string_lossy().to_string());
-    }
-
-    // 7) explicit track-order
-    if !track_order.is_empty() {
-        argv.push("--track-order".into());
-        let order = track_order.iter().map(|(fi,ti)| format!("{}:{}", fi, ti)).collect::<Vec<_>>().join(",");
-        argv.push(order);
+        argv.push(path.to_string_lossy().into_owned());
     }
 
     // Write opts.json
-    let opts_path = cmd.out_opts.clone().unwrap_or_else(|| staging_root.join("opts.json"));
-    let pretty = serde_json::to_string_pretty(&argv)?;
-    fs::write(&opts_path, pretty.as_bytes())?;
-    println!("Wrote opts.json -> {}", opts_path.display());
+    let opts_path = if let Some(p) = &args.out_opts { p.clone() } else { temp_dir.join("opts.json") };
+    let json_arr: Vec<&str> = argv.iter().map(|s| s.as_str()).collect();
+    let json_value = Value::Array(json_arr.iter().map(|s| Value::String((*s).to_string())).collect());
+    fs::write(&opts_path, serde_json::to_string_pretty(&json_value)?).context("write opts.json")?;
 
-    // Run mkvmerge @opts
-    let status = Command::new(&cmd.mkvmerge).arg(format!("@{}", opts_path.to_string_lossy())).status()?;
+    println!("Merge Summary: global_shift=0 ms, secondary={} ms, tertiary={} ms", args.sec_delay, args.ter_delay);
+    println!("Wrote opts.json -> {}", opts_path.to_string_lossy());
+
+    // Run mkvmerge @opts.json
+    let status = Command::new(&args.mkvmerge).args(&["@".to_string() + opts_path.to_str().unwrap()]).status()?;
     if !status.success() {
-        anyhow::bail!("mkvmerge failed building output");
+        eprintln!("mkvmerge failed with status {:?}", status.code());
+        return Err(anyhow!("mkvmerge failed"));
     }
 
-    // cleanup
-    if !keep_staging {
-        let _ = fs::remove_dir_all(&staging_root);
+    // Cleanup temp unless user explicitly asked to keep opts somewhere else in temp/
+    if args.out_opts.is_none() {
+        fs::remove_dir_all(&temp_dir).ok();
     }
 
     Ok(())
