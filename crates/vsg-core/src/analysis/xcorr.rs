@@ -45,8 +45,6 @@ pub struct XcorrResult {
 pub fn analyze(reference: &std::path::Path, target: &std::path::Path, params: &XcorrParams) -> Result<XcorrResult> {
     let ref_ns = probe_duration_ns(reference, &params.ffmpeg_path)
         .with_context(|| "Failed to probe reference duration")?;
-    let tgt_ns = probe_duration_ns(target, &params.ffmpeg_path)
-        .with_context(|| "Failed to probe target duration")?;
 
     let chunk_ns = (params.chunk_sec * 1_000_000_000.0) as i128;
     let mut t0s: Vec<i128> = Vec::new();

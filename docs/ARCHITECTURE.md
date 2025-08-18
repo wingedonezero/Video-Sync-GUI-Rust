@@ -1,12 +1,11 @@
 
-# VSG Architecture (Baseline PR0–PR3)
+# PR1: Probe + Extract
 
-Library core in `vsg-core`; CLI in `vsg-cli`. GUI can call into `vsg-core` later.
-
-- `vsg-core`:
-  - `analysis/xcorr.rs` — reference-windowed audio xcorr (**implemented**)
-  - `plan.rs` — positive-only delay computation (**implemented**)
-  - `probe.rs`, `extract.rs`, `opts.rs`, `chapters.rs` — TODO
-- `vsg-cli`:
-  - `analyze-audio` — **implemented**
-  - other subcommands — TODO stubs with explicit errors
+Implements:
+- `probe` via `mkvmerge -J` into TrackMeta & attachments.
+- `extract` via `mkvextract` according to rules:
+  - REF: first video track + chapters XML
+  - SEC: English audio + all subtitles
+  - TER: all subtitles + all attachments (fonts)
+- Deterministic filenames: REF_v_000.h264, SEC_a_001.ac3, TER_s_002.ass, TER_attach_###_name.ttf
+- Writes `manifest.json` under temp root.

@@ -1,6 +1,4 @@
 
-use camino::Utf8PathBuf;
-use regex::Regex;
 use serde::{Serialize, Deserialize};
 use std::path::PathBuf;
 
@@ -27,22 +25,9 @@ pub struct TempLayout {
 #[derive(Debug, Clone)]
 pub struct OrderRules {
     pub prefer_lang: String,
-    pub signs_regex: Regex,
+    pub signs_regex: regex::Regex,
     pub first_sub_default: bool,
     pub default_signs: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RawDelays {
-    pub sec_ms: Option<i64>,
-    pub ter_ms: Option<i64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PositiveDelays {
-    pub global_ms: i64,
-    pub sec_residual_ms: i64,
-    pub ter_residual_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,10 +46,46 @@ pub struct TrackMeta {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentMeta {
+    pub id: u32,
+    pub file_name: String,
+    pub content_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProbeResult {
+    pub tracks: Vec<TrackMeta>,
+    pub attachments: Vec<AttachmentMeta>,
+    pub has_chapters: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExtractItem {
+    pub meta: TrackMeta,
+    pub out_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExtractPlan {
-    pub tracks: Vec<(TrackMeta, PathBuf)>,
+    pub ref_video: Option<ExtractItem>,
+    pub sec_tracks: Vec<ExtractItem>,  // eng audio + subs
+    pub ter_subs: Vec<ExtractItem>,    // signs + subs only
+    pub ter_attachments: Vec<(AttachmentMeta, PathBuf)>,
     pub chapters_xml: Option<PathBuf>,
-    pub attachments: Vec<PathBuf>,
+    pub manifest_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawDelays {
+    pub sec_ms: Option<i64>,
+    pub ter_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PositiveDelays {
+    pub global_ms: i64,
+    pub sec_residual_ms: i64,
+    pub ter_residual_ms: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
