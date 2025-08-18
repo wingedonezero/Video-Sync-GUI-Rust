@@ -1,3 +1,5 @@
+// crates/vsg-cli/src/mux.rs
+// Updated mux pipeline: extract elementary streams, apply positive-only delay scheme, build @opts.json
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -7,7 +9,6 @@ use anyhow::{anyhow, Context, Result};
 use regex::Regex;
 use serde::Deserialize;
 use serde_json::Value;
-use tracing::{info, warn};
 
 #[derive(Debug, Deserialize)]
 struct MkvmergeJson {
@@ -39,12 +40,6 @@ struct TrackProps {
     track_name: Option<String>,
 }
 
-#[derive(Clone)]
-struct Probe {
-    file: PathBuf,
-    meta: MkvmergeJson,
-}
-
 fn run(cmd: &mut Command) -> Result<()> {
     let display = format!("{:?}", cmd);
     let status = cmd.status().with_context(|| format!("spawn failed: {}", display))?;
@@ -64,7 +59,7 @@ fn run_out(cmd: &mut Command) -> Result<String> {
 }
 
 fn mkvmerge_probe(file: &Path, mkvmerge: &Path) -> Result<MkvmergeJson> {
-    let json = run_out(Command::new(mkvmerge).arg("-J").arg(file))?;
+    let json = run_out(&mut Command::new(mkvmerge).arg("-J").arg(file))?;
     let v: MkvmergeJson = serde_json::from_str(&json).context("parse mkvmerge -J")?;
     Ok(v)
 }
@@ -87,6 +82,7 @@ fn ext_for_video_codec(codec: &str) -> &'static str {
 }
 
 fn mkvextract_tracks(src: &Path, pairs: &[(u32, PathBuf)], mkvextract: &Path) -> Result<()> {
+    if pairs.is_empty() { return Ok(()); }
     let mut cmd = Command::new(mkvextract);
     cmd.arg("tracks").arg(src);
     for (id, out) in pairs {
@@ -99,241 +95,214 @@ fn pick_lang(props: &Option<TrackProps>, fallback: &str) -> String {
     props.as_ref().and_then(|p| p.language.clone()).unwrap_or_else(|| fallback.to_string())
 }
 
-#[derive(Default)]
-struct Inputs {
-    ref_probe: Option<Probe>,
-    sec_probe: Option<Probe>,
-    ter_probe: Option<Probe>,
+pub struct MuxConfig<'a> {
+    pub reference: &'a Path,
+    pub secondary: Option<&'a Path>,
+    pub tertiary: Option<&'a Path>,
+    pub output: &'a Path,
+    pub mkvmerge: &'a Path,
+    pub mkvextract: &'a Path,
+    pub prefer_lang: &'a str,
+    pub signs_regex: &'a Regex,
+    pub out_opts: Option<&'a Path>,
+    pub sec_delay_ms: Option<i64>, // raw (analysis or provided)
+    pub ter_delay_ms: Option<i64>, // raw (analysis or provided)
 }
 
-#[derive(Default)]
-struct Extracted {
-    ref_video: Option<PathBuf>,
-    ref_chapters: Option<PathBuf>,
-    ref_audio: Vec<(PathBuf, String)>, // (path, lang)
-    sec_audio_en: Vec<(PathBuf, String)>,
-    sec_subs: Vec<(PathBuf, String)>,
-    ter_subs: Vec<(PathBuf, String)>,
-    ter_attachments: Vec<PathBuf>,
-}
-
-pub fn mux(
-    reference: &Path,
-    secondary: Option<&Path>,
-    tertiary: Option<&Path>,
-    output: &Path,
-    sec_delay: Option<i32>,
-    ter_delay: Option<i32>,
-    mkvmerge_path: &Path,
-    mkvextract_path: &Path,
-    prefer_lang: &str,
-    signs_regex: &Regex,
-    out_opts: Option<&Path>,
-) -> Result<()> {
+pub fn mux(cfg: &MuxConfig) -> Result<()> {
     let (temp_dir, _outdir) = ensure_dirs()?;
 
-    // 1) probe
-    info!("Probing inputs...");
-    let mut inputs = Inputs::default();
-    inputs.ref_probe = Some(Probe { file: reference.to_path_buf(), meta: mkvmerge_probe(reference, mkvmerge_path)? });
-    if let Some(sec) = secondary {
-        inputs.sec_probe = Some(Probe { file: sec.to_path_buf(), meta: mkvmerge_probe(sec, mkvmerge_path)? });
-    }
-    if let Some(ter) = tertiary {
-        inputs.ter_probe = Some(Probe { file: ter.to_path_buf(), meta: mkvmerge_probe(ter, mkvmerge_path)? });
-    }
+    // 1) probe inputs
+    let ref_json = mkvmerge_probe(cfg.reference, cfg.mkvmerge)?;
+    let sec_json = if let Some(s) = cfg.secondary { Some(mkvmerge_probe(s, cfg.mkvmerge)?) } else { None };
+    let ter_json = if let Some(t) = cfg.tertiary  { Some(mkvmerge_probe(t, cfg.mkvmerge)?) } else { None };
 
-    // 2) extract
-    info!("Extracting required streams to temp/ ...");
-    let mut ex = Extracted::default();
+    // 2) extract required
+    // REF video
+    let vtrack = ref_json.tracks.iter().find(|t| t.r#type=="video").ok_or_else(|| anyhow!("no video in ref"))?;
+    let vext = ext_for_video_codec(&vtrack.codec);
+    let ref_video = temp_dir.join(format!("REF_video{}", vext));
+    mkvextract_tracks(cfg.reference, &[(vtrack.id, ref_video.clone())], cfg.mkvextract)?;
 
-    // REF video (elementary), chapters, and audio
-    if let Some(refp) = &inputs.ref_probe {
-        // video
-        let vtrack = refp.meta.tracks.iter().find(|t| t.r#type == "video")
-            .ok_or_else(|| anyhow!("No video track in reference"))?;
-        let vext = ext_for_video_codec(&vtrack.codec);
-        let vout = temp_dir.join(format!("REF_video{}", vext));
-        mkvextract_tracks(&refp.file, &[(vtrack.id, vout.clone())], mkvextract_path)?;
-        ex.ref_video = Some(vout);
-
-        // chapters (if present)
-        if refp.meta.chapters.is_some() {
-            // Use mkvextract chapters
-            let chp = temp_dir.join("REF_chapters.xml");
-            run(Command::new(mkvextract_path)
-                .arg("chapters").arg(&refp.file)
-                .arg("-s")
-                .arg("-o").arg(&chp))?;
-            ex.ref_chapters = Some(chp);
-        }
-        // audio: keep all
-        for at in refp.meta.tracks.iter().filter(|t| t.r#type == "audio") {
-            let lang = pick_lang(&at.properties, "und");
-            let ext = if at.codec.to_lowerCase().contains("pcm") { ".wav" } else if at.codec.to_lowercase().contains("ac-3") || at.codec.to_lowercase().contains("ac3") { ".ac3" } else if at.codec.to_lowercase().contains("truehd") { ".thd" } else { ".audio" };
-            let outp = temp_dir.join(format!("REF_a{}_{}{}", at.id, lang, ext));
-            mkvextract_tracks(&refp.file, &[(at.id, outp.clone())], mkvextract_path)?;
-            ex.ref_audio.push((outp, lang));
-        }
+    // REF audio (all)
+    let mut ref_audio: Vec<(PathBuf, String)> = Vec::new();
+    for at in ref_json.tracks.iter().filter(|t| t.r#type=="audio") {
+        let lang = pick_lang(&at.properties, "und");
+        let ext = if at.codec.to_lowercase().contains("truehd") { ".thd" }
+                  else if at.codec.to_lowercase().contains("ac-3") || at.codec.to_lowercase().contains("ac3"){ ".ac3" }
+                  else if at.codec.to_lowercase().contains("pcm") { ".wav" }
+                  else { ".audio" };
+        let p = temp_dir.join(format!("REF_a{}_{}{}", at.id, lang, ext));
+        mkvextract_tracks(cfg.reference, &[(at.id, p.clone())], cfg.mkvextract)?;
+        ref_audio.push((p, lang));
     }
 
     // SEC: English audio + all subs
-    if let Some(secp) = &inputs.sec_probe {
-        for t in secp.meta.tracks.iter() {
-            match t.r#type.as_str() {
-                "audio" => {
-                    let lang = pick_lang(&t.properties, "und");
-                    if lang.to_lowercase().starts_with(&prefer_lang.to_lowercase()) {
-                        let ext = if t.codec.to_lowercase().contains("ac-3") || t.codec.to_lowercase().contains("ac3") { ".ac3" } else if t.codec.to_lowercase().contains("truehd") { ".thd" } else if t.codec.to_lowercase().contains("pcm") { ".wav" } else { ".audio" };
-                        let outp = temp_dir.join(format!("SEC_a{}_{}{}", t.id, lang, ext));
-                        mkvextract_tracks(&secp.file, &[(t.id, outp.clone())], mkvextract_path)?;
-                        ex.sec_audio_en.push((outp, lang));
-                    }
+    let mut sec_audio_en: Vec<(PathBuf, String)> = Vec::new();
+    let mut sec_subs: Vec<(PathBuf, String)> = Vec::new();
+    if let (Some(secp), Some(sjson)) = (cfg.secondary, &sec_json) {
+        for t in sjson.tracks.iter() {
+            if t.r#type=="audio" {
+                let lang = pick_lang(&t.properties, "und");
+                if lang.to_lowercase().starts_with(&cfg.prefer_lang.to_lowercase()) {
+                    let ext = if t.codec.to_lowercase().contains("truehd") { ".thd" }
+                              else if t.codec.to_lowercase().contains("ac-3") || t.codec.to_lowercase().contains("ac3"){ ".ac3" }
+                              else if t.codec.to_lowercase().contains("pcm") { ".wav" }
+                              else { ".audio" };
+                    let p = temp_dir.join(format!("SEC_a{}_{}{}", t.id, lang, ext));
+                    mkvextract_tracks(secp, &[(t.id, p.clone())], cfg.mkvextract)?;
+                    sec_audio_en.push((p, lang));
                 }
-                "subtitles" => {
-                    let lang = pick_lang(&t.properties, "und");
-                    let outp = temp_dir.join(format!("SEC_s{}_{}.ass", t.id, lang));
-                    mkvextract_tracks(&secp.file, &[(t.id, outp.clone())], mkvextract_path)?;
-                    ex.sec_subs.push((outp, lang));
-                }
-                _ => {}
+            } else if t.r#type=="subtitles" {
+                let lang = pick_lang(&t.properties, "und");
+                let p = temp_dir.join(format!("SEC_s{}_{}.ass", t.id, lang));
+                mkvextract_tracks(secp, &[(t.id, p.clone())], cfg.mkvextract)?;
+                sec_subs.push((p, lang));
             }
         }
     }
 
     // TER: subs + attachments
-    if let Some(terp) = &inputs.ter_probe {
-        for t in terp.meta.tracks.iter().filter(|t| t.r#type == "subtitles") {
+    let mut ter_subs: Vec<(PathBuf, String)> = Vec::new();
+    if let (Some(terp), Some(tjson)) = (cfg.tertiary, &ter_json) {
+        for t in tjson.tracks.iter().filter(|t| t.r#type=="subtitles") {
             let lang = pick_lang(&t.properties, "und");
-            let outp = temp_dir.join(format!("TER_s{}_{}.ass", t.id, lang));
-            mkvextract_tracks(&terp.file, &[(t.id, outp.clone())], mkvextract_path)?;
-            ex.ter_subs.push((outp, lang));
+            let p = temp_dir.join(format!("TER_s{}_{}.ass", t.id, lang));
+            mkvextract_tracks(terp, &[(t.id, p.clone())], cfg.mkvextract)?;
+            ter_subs.push((p, lang));
         }
-        // attachments
-        for (idx, att) in terp.meta.attachments.iter().enumerate() {
-            let fname = att.file_name.clone().unwrap_or_else(|| format!("att{}", idx));
-            let outp = temp_dir.join(format!("TER_att_{}", fname));
-            run(Command::new(mkvextract_path)
-                .arg("attachments").arg(&terp.file)
-                .arg(format!("{}:{}", att.id.unwrap_or(idx as u32), outp.to_string_lossy())))?;
-            ex.ter_attachments.push(outp);
-        }
-    }
-
-    // 4) assemble mkvmerge options argv
-    let mut argv: Vec<String> = Vec::new();
-
-    // output path
-    argv.push("--output".into());
-    argv.push(output.to_string_lossy().to_string());
-
-    // chapters
-    if let Some(chxml) = &ex.ref_chapters {
-        argv.push("--chapters".into());
-        argv.push(chxml.to_string_lossy().to_string());
-    }
-
-    // REF video (elementary)
-    if let Some(v) = &ex.ref_video {
-        argv.push("(".into());
-        argv.push(v.to_string_lossy().to_string());
-        argv.push(")".into());
-        argv.push("--language".into());
-        argv.push("0:und".into());
-        argv.push("--default-track-flag".into());
-        argv.push("0:no".into());
-        argv.push("--compression".into());
-        argv.push("0:none".into());
-    }
-
-    // SEC English audio (first default)
-    let mut audio_default_done = false;
-    for (i, (p, lang)) in ex.sec_audio_en.iter().enumerate() {
-        argv.push("(".into());
-        argv.push(p.to_string_lossy().to_string());
-        argv.push(")".into());
-        argv.push("--language".into());
-        argv.push(format!("0:{}", lang));
-        argv.push("--compression".into());
-        argv.push("0:none".into());
-        argv.push("--default-track-flag".into());
-        if !audio_default_done {
-            argv.push("0:yes".into());
-            audio_default_done = true;
-            if let Some(ms) = sec_delay {
-                argv.push("--sync".into());
-                argv.push(format!("0:{}", ms));
+        if !tjson.attachments.is_empty() {
+            for (idx, att) in tjson.attachments.iter().enumerate() {
+                let id = att.id.unwrap_or(idx as u32);
+                let name = att.file_name.clone().unwrap_or_else(|| format!("att{}", id));
+                let outp = temp_dir.join(format!("TER_att_{}", name));
+                let mut attcmd = Command::new(cfg.mkvextract);
+                attcmd.arg("attachments").arg(terp).arg(format!("{}:{}", id, outp.to_string_lossy()));
+                run(&mut attcmd)?;
             }
-        } else {
-            argv.push("0:no".into());
         }
     }
 
-    // REF audio (not default)
-    for (p, lang) in &ex.ref_audio {
-        argv.push("(".into());
-        argv.push(p.to_string_lossy().to_string());
-        argv.push(")".into());
-        argv.push("--language".into());
-        argv.push(format!("0:{}", lang));
-        argv.push("--default-track-flag".into());
-        argv.push("0:no".into());
-        argv.push("--compression".into());
-        argv.push("0:none".into());
+    // Chapters (if any)
+    let mut chapters_path: Option<PathBuf> = None;
+    if ref_json.chapters.is_some() {
+        let p = temp_dir.join("REF_chapters.xml");
+        let mut chcmd = Command::new(cfg.mkvextract);
+        chcmd.arg("chapters").arg(cfg.reference).arg("-s").arg("-o").arg(&p);
+        run(&mut chcmd)?;
+        chapters_path = Some(p);
     }
 
-    // SEC subs
-    for (p, lang) in &ex.sec_subs {
-        argv.push("(".into());
-        argv.push(p.to_string_lossy().to_string());
-        argv.push(")".into());
-        argv.push("--language".into());
-        argv.push(format!("0:{}", lang));
-        argv.push("--default-track-flag".into());
-        // signs default heuristic
+    // 3) Positive-only delay scheme
+    let raw_sec = cfg.sec_delay_ms.unwrap_or(0);
+    let raw_ter = cfg.ter_delay_ms.unwrap_or(0);
+    let mut deltas = vec![0i64, raw_sec, raw_ter];
+    let min_neg = *deltas.iter().min().unwrap_or(&0);
+    let global = if min_neg < 0 { -min_neg } else { 0 };
+    let vid_delay = global;
+    let sec_resid = raw_sec + global;
+    let ter_resid = raw_ter + global;
+
+    // 4) Assemble @opts.json argv in your deterministic order:
+    let mut argv: Vec<String> = Vec::new();
+    argv.push("--output".into());
+    argv.push(cfg.output.to_string_lossy().to_string());
+
+    if let Some(ch) = &chapters_path {
+        argv.push("--chapters".into());
+        argv.push(ch.to_string_lossy().to_string());
+    }
+
+    // REF video
+    argv.extend(["(".into(), ref_video.to_string_lossy().to_string(), ")".into()]);
+    argv.extend(["--language".into(), "0:und".into()]);
+    argv.extend(["--default-track-flag".into(), "0:no".into()]);
+    argv.extend(["--compression".into(), "0:none".into()]);
+    if vid_delay != 0 {
+        argv.extend(["--sync".into(), format!("0:{}", vid_delay)]);
+    }
+
+    // SEC English audio (first default yes), with residual
+    let mut audio_default_done = false;
+    for (p, lang) in &sec_audio_en {
+        argv.extend(["(".into(), p.to_string_lossy().to_string(), ")".into()]);
+        argv.extend(["--language".into(), format!("0:{}", lang)]);
+        argv.extend(["--compression".into(), "0:none".into()]);
+        argv.extend(["--default-track-flag".into(), if !audio_default_done { "0:yes".into() } else { "0:no".into() }]);
+        if !audio_default_done { audio_default_done = true; }
+        if sec_resid != 0 {
+            argv.extend(["--sync".into(), format!("0:{}", sec_resid)]);
+        }
+    }
+
+    // REF audio (no default; apply global so they follow delayed video)
+    for (p, lang) in &ref_audio {
+        argv.extend(["(".into(), p.to_string_lossy().to_string(), ")".into()]);
+        argv.extend(["--language".into(), format!("0:{}", lang)]);
+        argv.extend(["--default-track-flag".into(), "0:no".into()]);
+        argv.extend(["--compression".into(), "0:none".into()]);
+        if vid_delay != 0 {
+            argv.extend(["--sync".into(), format!("0:{}", vid_delay)]);
+        }
+    }
+
+    // SEC subs (signs default heuristic), apply global
+    for (p, lang) in &sec_subs {
+        argv.extend(["(".into(), p.to_string_lossy().to_string(), ")".into()]);
+        argv.extend(["--language".into(), format!("0:{}", lang)]);
         let fname = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
-        let is_signs = signs_regex.is_match(fname);
-        argv.push(if is_signs { "0:yes".into() } else { "0:no".into() });
-        argv.push("--compression".into());
-        argv.push("0:none".into());
+        let is_signs = cfg.signs_regex.is_match(fname);
+        argv.extend(["--default-track-flag".into(), if is_signs {"0:yes".into()} else {"0:no".into()} ]);
+        argv.extend(["--compression".into(), "0:none".into()]);
+        if vid_delay != 0 {
+            argv.extend(["--sync".into(), format!("0:{}", vid_delay)]);
+        }
     }
 
-    // TER subs
-    for (p, lang) in &ex.ter_subs {
-        argv.push("(".into());
-        argv.push(p.to_string_lossy().to_string());
-        argv.push(")".into());
-        argv.push("--language".into());
-        argv.push(format!("0:{}", lang));
-        argv.push("--default-track-flag".into());
-        argv.push("0:no".into());
-        argv.push("--compression".into());
-        argv.push("0:none".into());
-        if let Some(ms) = ter_delay {
-            argv.push("--sync".into());
-            argv.push(format!("0:{}", ms));
+    // TER subs (apply ter_resid)
+    for (p, lang) in &ter_subs {
+        argv.extend(["(".into(), p.to_string_lossy().to_string(), ")".into()]);
+        argv.extend(["--language".into(), format!("0:{}", lang)]);
+        argv.extend(["--default-track-flag".into(), "0:no".into()]);
+        argv.extend(["--compression".into(), "0:none".into()]);
+        if ter_resid != 0 {
+            argv.extend(["--sync".into(), format!("0:{}", ter_resid)]);
         }
     }
 
     // TER attachments
-    for p in &ex.ter_attachments {
-        argv.push("--attach-file".into());
-        argv.push(p.to_string_lossy().to_string());
+    if let Ok(rd) = std::fs::read_dir(&temp_dir) {
+        for e in rd {
+            if let Ok(ent) = e {
+                let p = ent.path();
+                if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
+                    if name.starts_with("TER_att_") {
+                        argv.extend(["--attach-file".into(), p.to_string_lossy().to_string()]);
+                    }
+                }
+            }
+        }
     }
 
-    // write opts.json if requested
-    if let Some(outp) = out_opts {
-        fs::write(outp, serde_json::to_string_pretty(&argv)?)?;
-        info!("Wrote opts.json -> {}", outp.to_string_lossy());
-    }
-
-    // 5) run mkvmerge @opts
-    // Save to temp to always run with @opts
+    // write opts.json
     let temp_opts = temp_dir.join("opts.json");
-    fs::write(&temp_opts, serde_json::to_string(&argv)?)?;
-    run(Command::new(mkvmerge_path).arg(format!("@{}", temp_opts.to_string_lossy())))?;
+    fs::write(&temp_opts, serde_json::to_string_pretty(&argv)?)?;
+    if let Some(out) = cfg.out_opts {
+        fs::write(out, serde_json::to_string_pretty(&argv)?)?;
+        println!("Wrote opts.json -> {}", out.display());
+    } else {
+        println!("Wrote opts.json -> {}", temp_opts.display());
+    }
 
-    // clean temp after success (keep when RUST_LOG=debug? here we always clean)
+    println!(
+        "Merge Summary: global_shift={} ms, secondary={} ms, tertiary={} ms",
+        vid_delay, sec_resid, ter_resid
+    );
+
+    // run mkvmerge @opts
+    run(&mut Command::new(cfg.mkvmerge).arg(format!("@{}", temp_opts.to_string_lossy())))?;
+
+    // cleanup temp folder
     let _ = fs::remove_file(&temp_opts);
     let _ = fs::remove_dir_all(&temp_dir);
     Ok(())
