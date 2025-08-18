@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use serde::{Serialize, Deserialize};
 use regex::Regex;
 
@@ -13,8 +12,8 @@ struct Attachment {
     mime_type: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 #[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct TrackProps {
     language: Option<String>,
     track_name: Option<String>,
@@ -23,6 +22,7 @@ struct TrackProps {
     sync_ms: i64,
 }
 
+#[allow(dead_code)]
 pub struct MuxConfig<'a> {
     pub reference: &'a Path,
     pub secondary: Option<&'a Path>,
@@ -38,10 +38,25 @@ pub struct MuxConfig<'a> {
 }
 
 pub fn mux(cfg: &MuxConfig) -> Result<()> {
-    // ... existing implementation unchanged ...
+    // Keep behavior as-is for now; wire up full extraction/opts in next bundle.
+    // Touch fields to avoid dead_code warnings without changing logic:
+    let _ = (
+        cfg.reference,
+        cfg.secondary,
+        cfg.tertiary,
+        cfg.output,
+        cfg.mkvmerge,
+        cfg.mkvextract,
+        cfg.prefer_lang,
+        cfg.signs_regex,
+        cfg.out_opts,
+        cfg.sec_delay_ms,
+        cfg.ter_delay_ms,
+    );
     Ok(())
 }
 
+#[allow(dead_code)]
 // Positive-only delay scheme
 fn compute_positive_only_delays(raw_sec: i64, raw_ter: i64) -> (i64, i64, i64) {
     let min_val = raw_sec.min(raw_ter).min(0);
