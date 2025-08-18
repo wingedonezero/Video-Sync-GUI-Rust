@@ -1,0 +1,2 @@
+[workspace]
+members = ["crates/vsg-core", "crates/vsg-cli", "crates/vsg-gui"]

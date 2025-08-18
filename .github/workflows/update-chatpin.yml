@@ -1,0 +1,16 @@
+name: Update Chatpin
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Update .chatpin
+        run: echo "Latest commit: $GITHUB_SHA" > .chatpin
+      - uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "chore: update .chatpin"
