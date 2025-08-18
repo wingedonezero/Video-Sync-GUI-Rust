@@ -1,53 +1,67 @@
+use std::path::{Path, PathBuf};
 use anyhow::Result;
-use clap::Args;
+use serde::{Serialize, Deserialize};
 use regex::Regex;
-use std::path::PathBuf;
 
-/// CLI arguments for muxing.
-#[derive(Debug, Args)]
-pub struct MuxArgs {
-    /// Reference video file
-    #[arg(long)]
-    pub reference: PathBuf,
-    /// Secondary video file (optional)
-    #[arg(long)]
-    pub secondary: Option<PathBuf>,
-    /// Tertiary video file (optional)
-    #[arg(long)]
-    pub tertiary: Option<PathBuf>,
-    /// Output MKV
-    #[arg(long)]
-    pub output: PathBuf,
-    /// Path to mkvmerge
-    #[arg(long)]
-    pub mkvmerge: PathBuf,
-    /// Path to mkvextract (optional)
-    #[arg(long)]
-    pub mkvextract: Option<PathBuf>,
-    /// Language preference
-    #[arg(long, default_value = "eng")]
-    pub prefer_lang: String,
-    /// Regex for signs/songs subtitles
-    #[arg(long, default_value = "(?i)sign|song")]
-    pub signs_pattern: String,
-    /// JSON out-opts file
-    #[arg(long)]
-    pub out_opts: Option<PathBuf>,
-    /// Optional delay override for secondary
-    #[arg(long)]
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Attachment {
+    file: PathBuf,
+    name: Option<String>,
+    description: Option<String>,
+    mime_type: Option<String>,
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct TrackProps {
+    language: Option<String>,
+    track_name: Option<String>,
+    default: bool,
+    compression_none: bool,
+    sync_ms: i64,
+}
+
+#[allow(dead_code)]
+pub struct MuxConfig<'a> {
+    pub reference: &'a Path,
+    pub secondary: Option<&'a Path>,
+    pub tertiary: Option<&'a Path>,
+    pub output: &'a Path,
+    pub mkvmerge: &'a Path,
+    pub mkvextract: &'a Path,
+    pub prefer_lang: &'a str,
+    pub signs_regex: &'a Regex,
+    pub out_opts: Option<&'a Path>,
     pub sec_delay_ms: Option<i64>,
-    /// Optional delay override for tertiary
-    #[arg(long)]
     pub ter_delay_ms: Option<i64>,
 }
 
-/// Entrypoint for `vsg-cli mux`.
-pub fn run(args: MuxArgs) -> Result<()> {
-    let re = Regex::new(&args.signs_pattern)?;
-    tracing::info!("Muxing with regex {:?}", re);
-
-    // Call your existing mux logic here.
-    // If you had a `pub fn mux(cfg: &MuxConfig) -> Result<()>`, adapt args into cfg.
-
+pub fn mux(cfg: &MuxConfig) -> Result<()> {
+    // Keep behavior as-is for now; wire up full extraction/opts in next bundle.
+    // Touch fields to avoid dead_code warnings without changing logic:
+    let _ = (
+        cfg.reference,
+        cfg.secondary,
+        cfg.tertiary,
+        cfg.output,
+        cfg.mkvmerge,
+        cfg.mkvextract,
+        cfg.prefer_lang,
+        cfg.signs_regex,
+        cfg.out_opts,
+        cfg.sec_delay_ms,
+        cfg.ter_delay_ms,
+    );
     Ok(())
+}
+
+#[allow(dead_code)]
+// Positive-only delay scheme
+fn compute_positive_only_delays(raw_sec: i64, raw_ter: i64) -> (i64, i64, i64) {
+    let min_val = raw_sec.min(raw_ter).min(0);
+    let global = min_val.unsigned_abs() as i64;
+    let deltas = vec![0i64, raw_sec, raw_ter];
+    let residuals: Vec<i64> = deltas.into_iter().map(|d| d + global).collect();
+    (global, residuals[1], residuals[2])
 }
