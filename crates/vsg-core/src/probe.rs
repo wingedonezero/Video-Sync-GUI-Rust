@@ -7,8 +7,7 @@ use crate::types::*;
 use crate::process::{run_quiet, must_succeed};
 
 pub fn probe_one(source_tag: &str, file: &Path, mkvmerge: &Path) -> Result<ProbeResult> {
-    let out = run_quiet(Command::new(mkvmerge).arg("-J").arg(file))
-        .with_context(|| format!("spawn mkvmerge -J {}", file.display()))?;
+    let out = run_quiet(Command::new(mkvmerge).arg("-J").arg(file))?;
     let out = must_succeed(out, "mkvmerge -J failed")?;
     let v: Value = serde_json::from_slice(&out.stdout)
         .with_context(|| "parse mkvmerge -J JSON")?;
@@ -54,11 +53,4 @@ pub fn probe_one(source_tag: &str, file: &Path, mkvmerge: &Path) -> Result<Probe
     let has_chapters = v.get("chapters").is_some();
 
     Ok(ProbeResult { tracks, attachments, has_chapters })
-}
-
-pub fn probe_all(src: &Sources, tools: &ToolPaths) -> Result<(ProbeResult, Option<ProbeResult>, Option<ProbeResult>)> {
-    let refp = probe_one("REF", &src.reference, &tools.mkvmerge)?;
-    let secp = if let Some(s) = &src.secondary { Some(probe_one("SEC", s, &tools.mkvmerge)?) } else { None };
-    let terp = if let Some(t) = &src.tertiary  { Some(probe_one("TER", t, &tools.mkvmerge)?) } else { None };
-    Ok((refp, secp, terp))
 }

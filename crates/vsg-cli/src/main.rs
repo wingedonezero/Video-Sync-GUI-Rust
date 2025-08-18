@@ -1,6 +1,5 @@
 
-mod analyze_audio;
-mod extract;
+mod mux;
 
 use clap::{Parser, Subcommand};
 
@@ -14,15 +13,14 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    AnalyzeAudio(analyze_audio::AnalyzeArgs),
-    Extract(extract::ExtractArgs),
+    /// Build opts.json & run mkvmerge
+    Mux(mux::MuxArgs),
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Commands::AnalyzeAudio(a) => analyze_audio::run(a)?,
-        Commands::Extract(a) => extract::run(a)?,
+        Commands::Mux(a) => mux::run(a)?,
     }
     Ok(())
 }

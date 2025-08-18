@@ -100,4 +100,6 @@ pub struct MergePlan {
     pub final_order: Vec<PlannedTrack>,
     pub chapters: Option<PathBuf>,
     pub delays: crate::types::PositiveDelays,
+    pub attachments: Vec<PathBuf>,
+    pub output_file: PathBuf,
 }
