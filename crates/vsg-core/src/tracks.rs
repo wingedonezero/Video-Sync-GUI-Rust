@@ -48,7 +48,9 @@ pub fn probe_streams(mkvmerge_path: &str, input_path: &str) -> Result<ProbeResul
         mkvmerge_path.to_string()
     };
 
-    let out = run_capture(Command::new(&mkvmerge).arg("-J").arg(input_path))
+    let mut cmd = Command::new(&mkvmerge);
+    cmd.arg("-J").arg(input_path);
+    let out = run_capture(&mut cmd)
         .with_context(|| format!("Failed to run '{} -J {}'", mkvmerge, input_path))?;
 
     let parsed: MkvmergeJson = serde_json::from_str(&out)

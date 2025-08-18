@@ -7,11 +7,11 @@ use tracing::info;
 /// Return absolute path to an executable on PATH (or specific path if given)
 /// Errors with VsgError::ToolMissing when not found.
 pub fn which_tool(name: &str) -> Result<String> {
-    which::which(name)
+    Ok(which::which(name)
         .map_err(|_| VsgError::ToolMissing(name.to_string()))?
         .into_os_string()
         .into_string()
-        .map_err(|_| VsgError::ToolMissing(name.to_string()))
+        .map_err(|_| VsgError::ToolMissing(name.to_string()))?)
 }
 
 /// Stream stdout/stderr line-by-line to tracing and return exit code.
@@ -42,8 +42,8 @@ pub fn run_compact(cmd: &mut Command) -> Result<i32> {
 }
 
 /// Run a command and capture stdout fully (stderr streamed to logs).
-/// Returns Ok(stdout_string) on success, Err on non-zero exit.
-pub fn run_capture(mut cmd: Command) -> Result<String> {
+/// Accepts &mut Command to mirror run_compact usage.
+pub fn run_capture(cmd: &mut Command) -> Result<String> {
     let mut child = cmd.stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
@@ -71,7 +71,7 @@ pub fn run_capture(mut cmd: Command) -> Result<String> {
 
     let status = child.wait()?;
     if !status.success() {
-        return Err(VsgError::ProcessFailed { tool: "capture".into(), code: status.code() }.into());
+        return Err(VsgError::ProcessFailed { tool: format!("{:?}", cmd), code: status.code() }.into());
     }
     Ok(out)
 }

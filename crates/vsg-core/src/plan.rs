@@ -1,5 +1,3 @@
-use anyhow::Result;
-
 pub struct Plan {
     pub global_shift_ms: i32,
     pub secondary_ms: i32,
@@ -20,6 +18,8 @@ pub fn build_plan(sec: Option<i32>, ter: Option<i32>) -> Plan {
 }
 
 pub fn summarize_plan(p: &Plan) -> String {
-    format!("Merge Summary: global_shift={} ms, secondary={} ms, tertiary={} ms",
-        p.global_shift_ms, p.secondary_ms, p.tertiary_ms)
+    format!(
+        "Merge Summary: global_shift={} ms, secondary={} ms, tertiary={} ms",
+        p.global_shift_ms, p.secondary_ms, p.tertiary_ms
+    )
 }
