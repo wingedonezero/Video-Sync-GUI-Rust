@@ -1,4 +1,3 @@
-// crates/vsg-cli/src/main.rs
 use clap::{Parser, Subcommand, Args};
 use anyhow::Result;
 use std::path::PathBuf;
@@ -104,7 +103,7 @@ fn main() -> Result<()> {
             cmd_analyze::run(&args)?;
         }
         Commands::Mux(m) => {
-            let re = Regex::new(&m.signs_pattern).map_err(|e| anyhow::anyhow!(e))?;
+            let re = Regex::new(&m.signs_pattern).map_err(anyhow::Error::new)?;
             let cfg = mux::MuxConfig {
                 reference: &m.reference,
                 secondary: m.secondary.as_deref(),
