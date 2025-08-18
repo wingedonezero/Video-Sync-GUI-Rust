@@ -1,6 +1,7 @@
-use anyhow::Result;
 
-pub fn rename_xml(_xml_in: &str, _xml_out: &str) -> Result<()> {
-    // TODO: implement Chapter NN rename, und language, shift/snap as configured.
-    Ok(())
+use anyhow::Result;
+use std::path::Path;
+
+pub fn shift_chapters_xml(_in_xml: &Path, _out_xml: &Path, _shift_ms: i64) -> Result<()> {
+    anyhow::bail!("chapters shift not implemented yet")
 }

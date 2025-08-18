@@ -1,13 +1,6 @@
-use tracing::{info};
 
-pub fn log_cmd(cmdline: &str) {
-    info!("$ {}", cmdline);
-}
+use tracing::{info, warn, error};
 
-pub fn log_progress(pct: u8) {
-    info!("Progress: {}%", pct);
-}
-
-pub fn log_section(title: &str) {
-    info!("=== {} ===", title);
-}
+pub fn step<S: AsRef<str>>(s: S) { info!("{}", s.as_ref()); }
+pub fn warn_line<S: AsRef<str>>(s: S) { warn!("{}", s.as_ref()); }
+pub fn err_line<S: AsRef<str>>(s: S) { error!("{}", s.as_ref()); }

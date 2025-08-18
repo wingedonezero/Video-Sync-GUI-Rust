@@ -5,22 +5,20 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Clone)]
-pub struct AnalyzeParams {
+pub struct XcorrParams {
     pub chunk_sec: f32,
     pub chunks: usize,
     pub lag_ms: i64,
-    pub min_votes: usize,
     pub min_match_pct: f32,
     pub ffmpeg_path: String,
     pub save_debug: Option<std::path::PathBuf>,
 }
-impl Default for AnalyzeParams {
+impl Default for XcorrParams {
     fn default() -> Self {
         Self {
             chunk_sec: 15.0,
             chunks: 10,
             lag_ms: 2000,
-            min_votes: 3,
             min_match_pct: 20.0,
             ffmpeg_path: "ffmpeg".to_string(),
             save_debug: None,
@@ -29,7 +27,7 @@ impl Default for AnalyzeParams {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChunkResult {
+pub struct WindowResult {
     pub index: usize,
     pub t0_ns: i128,
     pub best_lag_ms: i64,
@@ -37,14 +35,14 @@ pub struct ChunkResult {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AnalyzeResult {
+pub struct XcorrResult {
     pub raw_delay_ms: i64,
-    pub chosen_votes: usize,
-    pub chosen_avg_match: f32,
-    pub chunks: Vec<ChunkResult>,
+    pub votes: usize,
+    pub avg_match_pct: f32,
+    pub windows: Vec<WindowResult>,
 }
 
-pub fn analyze_audio_offsets(reference: &std::path::Path, target: &std::path::Path, params: &AnalyzeParams) -> Result<AnalyzeResult> {
+pub fn analyze(reference: &std::path::Path, target: &std::path::Path, params: &XcorrParams) -> Result<XcorrResult> {
     let ref_ns = probe_duration_ns(reference, &params.ffmpeg_path)
         .with_context(|| "Failed to probe reference duration")?;
     let tgt_ns = probe_duration_ns(target, &params.ffmpeg_path)
@@ -67,32 +65,19 @@ pub fn analyze_audio_offsets(reference: &std::path::Path, target: &std::path::Pa
         }
     }
 
-    eprintln!("[vsg] analyze: ref={:.3}s tgt={:.3}s chunks={} win={}s lag=±{}ms",
-        ref_ns as f64 / 1e9, tgt_ns as f64 / 1e9, t0s.len(), params.chunk_sec, params.lag_ms);
-
-    let mut results: Vec<ChunkResult> = Vec::new();
+    let mut results: Vec<WindowResult> = Vec::new();
     for (idx, &t0_ns) in t0s.iter().enumerate() {
-        if t0_ns + chunk_ns > tgt_ns {
-            eprintln!("[vsg]  -> skip chunk #{idx} t0={:.3}s (target short)", t0_ns as f64 / 1e9);
-            continue;
-        }
         let ref_pcm = decode_window(reference, t0_ns, params.chunk_sec, &params.ffmpeg_path)?;
         let tgt_pcm = decode_window(target,     t0_ns, params.chunk_sec, &params.ffmpeg_path)?;
-        if ref_pcm.len() != tgt_pcm.len() || ref_pcm.is_empty() {
-            eprintln!("[vsg]  -> skip chunk #{idx} (decode mismatch)");
-            continue;
-        }
+        if ref_pcm.len() != tgt_pcm.len() || ref_pcm.is_empty() { continue; }
 
         let (best_lag, best_r) = correlate_best_lag_ms(&ref_pcm, &tgt_pcm, params.lag_ms);
         let match_pct = ((best_r + 1.0) * 50.0).clamp(0.0, 100.0);
-        eprintln!("[vsg]  -> [{}/{}] t0={:.3}s best={}ms match={:.1}%",
-            results.len() + 1, t0s.len(), t0_ns as f64 / 1e9, best_lag, match_pct);
-
-        results.push(ChunkResult { index: idx, t0_ns, best_lag_ms: best_lag, match_pct });
+        results.push(WindowResult { index: idx, t0_ns, best_lag_ms: best_lag, match_pct });
     }
 
-    if results.len() < params.min_votes {
-        return Err(anyhow!("Not enough valid chunks (have {}, need {})", results.len(), params.min_votes));
+    if results.is_empty() {
+        return Err(anyhow!("No valid chunks decoded"));
     }
 
     use std::collections::BTreeMap;
@@ -117,13 +102,12 @@ pub fn analyze_audio_offsets(reference: &std::path::Path, target: &std::path::Pa
         return Err(anyhow!("Winner below min_match_pct (avg={best_avg:.1}%)"));
     }
 
-    let out = AnalyzeResult {
+    let out = XcorrResult {
         raw_delay_ms: best_lag,
-        chosen_votes: best_votes,
-        chosen_avg_match: best_avg,
-        chunks: results.clone(),
+        votes: best_votes,
+        avg_match_pct: best_avg,
+        windows: results.clone(),
     };
-
     if let Some(path) = &params.save_debug {
         std::fs::write(path, serde_json::to_vec_pretty(&out)?)?;
     }
@@ -131,6 +115,8 @@ pub fn analyze_audio_offsets(reference: &std::path::Path, target: &std::path::Pa
 }
 
 fn probe_duration_ns(path: &std::path::Path, ffmpeg: &str) -> Result<i128> {
+    use std::process::Command;
+    use std::process::Stdio;
     let out = Command::new(ffmpeg)
         .args(["-i", path.to_str().unwrap_or_default()])
         .stderr(Stdio::piped())
@@ -159,6 +145,8 @@ fn parse_hms_to_ns(hms: &str) -> Option<i128> {
 }
 
 fn decode_window(path: &std::path::Path, t0_ns: i128, dur_sec: f32, ffmpeg: &str) -> Result<Vec<f32>> {
+    use std::process::Command;
+    use std::process::Stdio;
     let t0 = (t0_ns as f64) / 1e9;
     let dur = dur_sec as f64;
     let mut child = Command::new(ffmpeg)
@@ -188,7 +176,6 @@ fn decode_window(path: &std::path::Path, t0_ns: i128, dur_sec: f32, ffmpeg: &str
 }
 
 fn correlate_best_lag_ms(ref_pcm: &[f32], tgt_pcm: &[f32], max_lag_ms: i64) -> (i64, f32) {
-    // z-score normalize
     fn z(x: &[f32]) -> Vec<f32> {
         let mean = x.iter().copied().map(|v| v as f64).sum::<f64>() / (x.len() as f64);
         let var = x.iter().copied().map(|v| {
