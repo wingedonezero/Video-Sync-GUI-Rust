@@ -1,16 +1,25 @@
-name: Update Chatpin
+name: Update .chatpin on commit
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
 
 jobs:
-  update:
+  update-file:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v3
-      - name: Update .chatpin
-        run: echo "Latest commit: $GITHUB_SHA" > .chatpin
-      - uses: stefanzweifel/git-auto-commit-action@v4
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Update .chatpin with latest commit SHA
+        run: |
+          echo "${{ github.sha }}" > .chatpin
+
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
         with:
-          commit_message: "chore: update .chatpin"
+          commit_message: "docs: update .chatpin to latest commit [skip ci]"
+          file_pattern: .chatpin
