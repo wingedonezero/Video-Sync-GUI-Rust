@@ -1,3 +1,4 @@
+// GUI placeholder. We'll add imgui + winit when wiring begins.
 fn main() {
-    println!("Hello from vsg-gui!");
+    println!("vsg-gui: build with --features gui once UI is wired.");
 }

@@ -1,2 +1,13 @@
 [workspace]
-members = ["crates/vsg-core", "crates/vsg-cli", "crates/vsg-gui"]
+members = [
+    "crates/vsg-core",
+    "crates/vsg-cli",
+    "crates/vsg-gui",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["wingedonezero & contributors"]
+repository = "https://github.com/wingedonezero/Video-Sync-GUI-Rust"

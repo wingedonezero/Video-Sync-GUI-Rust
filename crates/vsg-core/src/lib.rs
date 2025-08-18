@@ -1,1 +1,9 @@
-// Core library entry
+pub mod config;
+pub mod process;
+pub mod tracks;
+pub mod mkvmerge;
+pub mod chapters;
+pub mod analysis;
+pub mod plan;
+pub mod logging;
+pub mod errors;
