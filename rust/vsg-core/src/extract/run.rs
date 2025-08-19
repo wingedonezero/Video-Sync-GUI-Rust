@@ -1,19 +1,10 @@
 use crate::error::VsgError;
-use crate::model::{SelectionManifest, Source};
+use crate::model::SelectionManifest;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
 fn ensure_dir(p:&PathBuf) -> Result<(),VsgError> { fs::create_dir_all(p).map_err(|e| VsgError::Io(e)) }
-
-fn mkvextract_tracks_cmd(input:&str, mappings:&[(u32, String)]) -> Vec<String> {
-    // mkvextract tracks input.mkv 0:out0 1:out1 ...
-    let mut argv = vec!["tracks".to_string(), input.to_string()];
-    for (id,out) in mappings {
-        argv.push(format!("{}:{}", id, out));
-    }
-    argv
-}
 
 pub struct ExtractSummary {
     pub files: Vec<String>,
@@ -28,7 +19,7 @@ pub fn run_mkvextract(selection:&SelectionManifest, work_root:&PathBuf) -> Resul
     let mut ter_dir = work_root.clone(); ter_dir.push("ter"); ensure_dir(&ter_dir)?;
 
     // Helper to run a single mkvextract tracks call
-    let mut run_for = |source:Source, file_path:&str, entries:&[(u32, String)]| -> Result<(),VsgError> {
+    let run_for = |file_path:&str, entries:&[(u32, String)]| -> Result<(),VsgError> {
         if entries.is_empty() { return Ok(()); }
         let mut cmd = Command::new("mkvextract");
         cmd.arg("tracks").arg(file_path);
@@ -55,7 +46,7 @@ pub fn run_mkvextract(selection:&SelectionManifest, work_root:&PathBuf) -> Resul
             maps.push((t.track_id, p.to_string_lossy().to_string()));
             out_files.push(p.to_string_lossy().to_string());
         }
-        run_for(Source::REF, input, &maps)?;
+        run_for(input, &maps)?;
     }
 
     // SEC
@@ -70,7 +61,7 @@ pub fn run_mkvextract(selection:&SelectionManifest, work_root:&PathBuf) -> Resul
             maps.push((t.track_id, p.to_string_lossy().to_string()));
             out_files.push(p.to_string_lossy().to_string());
         }
-        run_for(Source::SEC, input, &maps)?;
+        run_for(input, &maps)?;
     }
 
     // TER
@@ -85,7 +76,7 @@ pub fn run_mkvextract(selection:&SelectionManifest, work_root:&PathBuf) -> Resul
             maps.push((t.track_id, p.to_string_lossy().to_string()));
             out_files.push(p.to_string_lossy().to_string());
         }
-        run_for(Source::TER, input, &maps)?;
+        run_for(input, &maps)?;
     }
 
     Ok(ExtractSummary{files: out_files})

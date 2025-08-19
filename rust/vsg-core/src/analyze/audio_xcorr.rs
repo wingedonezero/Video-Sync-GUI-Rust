@@ -38,8 +38,9 @@ fn cross_corr_lag_ns(ref_win:&[i16], other_win:&[i16], sr:u32)->i128{
   let y1=corr_at(ref_win,other_win,best_lag-1) as f64;
   let y2=best_sum as f64;
   let y3=corr_at(ref_win,other_win,best_lag+1) as f64;
-  let denom=(y1 - 2.0*y2 + y3); let frac= if denom.abs()>1e-9 { 0.5*(y1 - y3)/denom } else { 0.0 };
-  let lag_samples=(best_lag as f64 + frac);
+  let denom=y1 - 2.0*y2 + y3;
+  let frac= if denom.abs()>1e-9 { 0.5*(y1 - y3)/denom } else { 0.0 };
+  let lag_samples=best_lag as f64 + frac;
   let ns_per_sample=1_000_000_000.0 / (sr as f64);
   (lag_samples * ns_per_sample) as i128
 }
