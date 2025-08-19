@@ -1,0 +1,18 @@
+{
+  "tracks": [
+    {
+      "id": 0,
+      "type": "video",
+      "codec": "h264",
+      "language": "und",
+      "name": "V"
+    },
+    {
+      "id": 1,
+      "type": "audio",
+      "codec": "aac",
+      "language": "eng",
+      "name": "ENG"
+    }
+  ]
+}

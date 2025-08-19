@@ -1,0 +1,18 @@
+{
+  "tracks": [
+    {
+      "id": 0,
+      "type": "subtitles",
+      "codec": "ass",
+      "language": "eng",
+      "name": "Signs"
+    },
+    {
+      "id": 1,
+      "type": "subtitles",
+      "codec": "ass",
+      "language": "eng",
+      "name": "Full"
+    }
+  ]
+}
