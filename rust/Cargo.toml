@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "vsg-core",
+    "vsg-cli",
+]
+
+# Optional: centralize common deps (crates can use 'workspace = true' if desired later)
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+time = { version = "0.3", features = ["macros"] }
+clap = { version = "4", features = ["derive"] }
