@@ -1,0 +1,1 @@
+{ "method":"audio-xcorr","params":{"chunks":10,"chunk_dur":8,"min_match":0.8,"sample_rate":48000},"delays_ms_signed":{"sec":-1168,"ter":1173},"global_shift_ms":1168,"delays_ms_positive":{"sec":0,"ter":2341} }
