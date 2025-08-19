@@ -1,4 +1,0 @@
-
-[workspace]
-resolver = "2"
-members = ["crates/vsg-core", "crates/vsg-cli"]
