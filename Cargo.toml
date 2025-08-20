@@ -1,2 +1,8 @@
 [workspace]
-members = ["rust/*"]
+members = [
+  "rust/vsg-core",
+  "rust/vsg-cli",
+  "rust/vsg-gui",
+]
+default-members = ["rust/vsg-cli", "rust/vsg-gui"]
+resolver = "2"

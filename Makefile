@@ -1,10 +1,22 @@
-.PHONY: build debug clean
+.PHONY: all core cli gui run-cli run-gui clean
 
-build:
-	cd rust && cargo build -p vsg-cli --release
+all:
+	cargo build --release
 
-debug:
-	cd rust && cargo build -p vsg-cli
+core:
+	cargo build -p vsg-core --release
+
+cli:
+	cargo build -p vsg-cli --release
+
+gui:
+	cargo build -p vsg-gui --release
+
+run-cli:
+	./rust/target/release/vsg-cli --help || true
+
+run-gui:
+	./rust/target/release/vsg-gui || true
 
 clean:
-	cd rust && cargo clean
+	cargo clean
