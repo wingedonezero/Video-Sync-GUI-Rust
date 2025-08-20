@@ -22,11 +22,6 @@ fn ext_for(track_type:&str, codec_opt:Option<&str>) -> &'static str {
                 "opus" | "a_opus" => "opus",
                 "vorbis" | "a_vorbis" => "ogg",
                 "pcm" | "lpcm" | "a_pcm" | "a_ms/acm" => "wav",
-                // Uppercase mkvmerge IDs
-                "a_aac" | "a_ac3" | "a_eac3" | "a_dts" | "a_truehd" | "a_flac" | "a_opus" | "a_vorbis" => {
-                    // already matched by lowercase, keep for clarity
-                    "audio"
-                }
                 _ => {
                     // Check raw mkvmerge codec_id forms
                     if c.starts_with("A_") {

@@ -20,45 +20,18 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum SubCmd {
-    /// Step 1: extraction (selection + mkvextract)
     Extract {
-        /// Optional manifest: if provided, we ignore --ref/--sec/--ter flags and run mkvextract using this manifest
-        #[arg(long)]
-        manifest: Option<PathBuf>,
-
-        /// Reference media file path
-        #[arg(long)]
-        ref_file: Option<String>,
-        /// Secondary media file path
-        #[arg(long)]
-        sec_file: Option<String>,
-        /// Tertiary media file path
-        #[arg(long)]
-        ter_file: Option<String>,
-
-        /// Probe JSON for REF (dev/fixtures)
-        #[arg(long)]
-        ref_probe: Option<String>,
-        /// Probe JSON for SEC (dev/fixtures)
-        #[arg(long)]
-        sec_probe: Option<String>,
-        /// Probe JSON for TER (dev/fixtures)
-        #[arg(long)]
-        ter_probe: Option<String>,
-
-        /// Work dir (temp). If omitted, defaults to <binary_dir>/_work/job_<timestamp>
-        #[arg(long)]
-        work_dir: Option<PathBuf>,
-
-        /// Output dir (final outputs). If omitted, defaults to <binary_dir>/_out
-        #[arg(long)]
-        out_dir: Option<PathBuf>,
-
-        /// Keep extracted media files (otherwise cleaned on success)
-        #[arg(long, default_value_t=false)]
-        keep_temp: bool,
+        #[arg(long)] manifest: Option<PathBuf>,
+        #[arg(long)] ref_file: Option<String>,
+        #[arg(long)] sec_file: Option<String>,
+        #[arg(long)] ter_file: Option<String>,
+        #[arg(long)] ref_probe: Option<String>,
+        #[arg(long)] sec_probe: Option<String>,
+        #[arg(long)] ter_probe: Option<String>,
+        #[arg(long)] work_dir: Option<PathBuf>,
+        #[arg(long)] out_dir: Option<PathBuf>,
+        #[arg(long, default_value_t=false)] keep_temp: bool,
     },
-    /// Step 2: analysis (audio-xcorr or videodiff)
     Analyze {
         #[arg(long)] ref_audio_path: String,
         #[arg(long)] sec_audio_path: Option<String>,
@@ -68,7 +41,6 @@ enum SubCmd {
         #[arg(long, default_value_t=48000)] sample_rate: u32,
         #[arg(long, default_value_t=0.80)] min_match: f64,
         #[arg(long)] duration_s: f64,
-        /// Optional videodiff mode: provide two video paths
         #[arg(long)] videodiff: Option<String>,
         #[arg(long)] ref_video_path: Option<String>,
         #[arg(long)] other_video_path: Option<String>,
@@ -80,7 +52,7 @@ enum SubCmd {
 }
 
 #[derive(serde::Deserialize)]
-struct ProbeTrack { id:u32, #[serde(rename="type")] kind:String, codec_id:Option<String>, codec:Option<String>, language:Option<String> }
+struct ProbeTrack { id:u32, #[serde(rename="type")] _kind:String, codec_id:Option<String>, codec:Option<String>, language:Option<String> }
 #[derive(serde::Deserialize)]
 struct ProbeFile { tracks:Vec<ProbeTrack> }
 
@@ -94,22 +66,20 @@ fn mkvmerge_probe_json(input:&str) -> ProbeFile {
 }
 
 fn enrich_with_probe(sel:&mut SelectionManifest) {
-    // Build set of unique inputs
     let mut inputs: Vec<String> = Vec::new();
     for s in [&sel.ref_tracks, &sel.sec_tracks, &sel.ter_tracks] {
         for e in s.iter() {
             if !inputs.contains(&e.file_path) { inputs.push(e.file_path.clone()); }
         }
     }
-    // Probe each input
-    let mut map: HashMap<(String,u32), (Option<String>, Option<String>)> = HashMap::new(); // (file,id) -> (codec_id/codec, language)
+    use std::collections::HashMap;
+    let mut map: HashMap<(String,u32), (Option<String>, Option<String>)> = HashMap::new();
     for inp in inputs.iter() {
         let pf = mkvmerge_probe_json(inp);
         for t in pf.tracks {
             map.insert((inp.clone(), t.id), (t.codec_id.or(t.codec), t.language));
         }
     }
-    // Enrich missing codec/language
     for e in sel.ref_tracks.iter_mut().chain(sel.sec_tracks.iter_mut()).chain(sel.ter_tracks.iter_mut()) {
         if e.codec.is_none() || e.language.is_none() {
             if let Some((c,l)) = map.get(&(e.file_path.clone(), e.track_id)) {
@@ -122,9 +92,7 @@ fn enrich_with_probe(sel:&mut SelectionManifest) {
 
 fn extract_from_manifest(manifest_path:&PathBuf, work:&PathBuf) {
     let text = fs::read_to_string(manifest_path).expect("read manifest");
-    let mut sel: SelectionManifest = serde_json::from_str(&text).expect("parse manifest");
-
-    // Enrich selection using mkvmerge -J (fills codec/language when missing)
+    let mut sel: vsg_core::model::SelectionManifest = serde_json::from_str(&text).expect("parse manifest");
     enrich_with_probe(&mut sel);
 
     let mut manifest_dir = work.clone(); manifest_dir.push("manifest");
@@ -143,31 +111,30 @@ fn main() {
     let cli = Cli::parse();
     match cli.cmd {
         SubCmd::Extract { manifest, ref_file, sec_file, ter_file, ref_probe, sec_probe, ter_probe, work_dir, out_dir, keep_temp } => {
-            let work = work_dir.unwrap_or_else(|| default_work_dir());
-            let _out = out_dir.unwrap_or_else(|| default_output_dir());
+            let work = work_dir.unwrap_or_else(|| vsg_core::fsutil::default_work_dir());
+            let _out = out_dir.unwrap_or_else(|| vsg_core::fsutil::default_output_dir());
             fs::create_dir_all(&work).expect("create work dir");
 
             if let Some(mani) = manifest {
                 extract_from_manifest(&mani, &work);
             } else {
-                // legacy flag flow: build selection via probes and Defaults
                 let ref_file = ref_file.expect("--ref-file required (or use --manifest)");
-                let refp = load_probe(&ref_probe.expect("--ref-probe required")).expect("load ref probe");
+                let refp = vsg_core::probe::load_probe(&ref_probe.expect("--ref-probe required")).expect("load ref probe");
                 let secp = if let (Some(_secf), Some(p)) = (sec_file.as_ref(), sec_probe.as_ref()) {
-                    Some(load_probe(p).expect("load sec probe"))
+                    Some(vsg_core::probe::load_probe(p).expect("load sec probe"))
                 } else { None };
                 let terp = if let (Some(_terf), Some(p)) = (ter_file.as_ref(), ter_probe.as_ref()) {
-                    Some(load_probe(p).expect("load ter probe"))
+                    Some(vsg_core::probe::load_probe(p).expect("load ter probe"))
                 } else { None };
 
-                let sel = Defaults::select(&ref_file, &refp, sec_file.as_deref(), secp.as_ref(), ter_file.as_deref(), terp.as_ref());
+                let sel = vsg_core::extract::select::Defaults::select(&ref_file, &refp, sec_file.as_deref(), secp.as_ref(), ter_file.as_deref(), terp.as_ref());
 
                 let mut manifest_dir = work.clone(); manifest_dir.push("manifest");
                 fs::create_dir_all(&manifest_dir).expect("manifest dir");
                 let mut sel_path = manifest_dir.clone(); sel_path.push("selection.json");
                 fs::write(&sel_path, serde_json::to_string_pretty(&sel).unwrap()).expect("write selection");
 
-                let summary = run_mkvextract(&sel, &work).expect("mkvextract failed");
+                let summary = vsg_core::extract::run::run_mkvextract(&sel, &work).expect("mkvextract failed");
                 let mut log_path = manifest_dir.clone(); log_path.push("extract.log");
                 let lines = summary.files.iter().map(|s| format!("EXTRACTED {}", s)).collect::<Vec<_>>().join("\n");
                 fs::write(&log_path, lines).expect("write log");
@@ -182,7 +149,7 @@ fn main() {
             }
         }
         SubCmd::Analyze { ref_audio_path, sec_audio_path, ter_audio_path, chunks, chunk_dur, sample_rate, min_match, duration_s, videodiff, ref_video_path, other_video_path, err_min, err_max, work_dir, keep_temp:_ } => {
-            let work = work_dir.unwrap_or_else(|| default_work_dir());
+            let work = work_dir.unwrap_or_else(|| vsg_core::fsutil::default_work_dir());
             let mut manifest_dir = work.clone(); manifest_dir.push("manifest");
             fs::create_dir_all(&manifest_dir).expect("manifest dir");
 
@@ -195,15 +162,14 @@ fn main() {
             });
 
             if let Some(sec) = sec_audio_path.as_ref() {
-                let r = analyze_audio_xcorr(&ref_audio_path, sec, duration_s, &XCorrParams{chunks,chunk_dur_s:chunk_dur,sample_rate,min_match}).expect("xcorr sec");
+                let r = vsg_core::analyze::audio_xcorr::analyze_audio_xcorr(&ref_audio_path, sec, duration_s, &vsg_core::analyze::audio_xcorr::XCorrParams{chunks,chunk_dur_s:chunk_dur,sample_rate,min_match}).expect("xcorr sec");
                 result["delays_ms_signed"]["sec"] = serde_json::json!(r.delay_ms);
             }
             if let Some(ter) = ter_audio_path.as_ref() {
-                let r = analyze_audio_xcorr(&ref_audio_path, ter, duration_s, &XCorrParams{chunks,chunk_dur_s:chunk_dur,sample_rate,min_match}).expect("xcorr ter");
+                let r = vsg_core::analyze::audio_xcorr::analyze_audio_xcorr(&ref_audio_path, ter, duration_s, &vsg_core::analyze::audio_xcorr::XCorrParams{chunks,chunk_dur_s:chunk_dur,sample_rate,min_match}).expect("xcorr ter");
                 result["delays_ms_signed"]["ter"] = serde_json::json!(r.delay_ms);
             }
 
-            // Global positive-only shift
             let mut present = vec![0i64];
             if let Some(v) = result["delays_ms_signed"].get("sec").and_then(|x| x.as_i64()) { present.push(v); }
             if let Some(v) = result["delays_ms_signed"].get("ter").and_then(|x| x.as_i64()) { present.push(v); }
@@ -213,9 +179,8 @@ fn main() {
             if let Some(v) = result["delays_ms_signed"].get("sec").and_then(|x| x.as_i64()) { result["delays_ms_positive"]["sec"] = serde_json::json!(v + g as i64); }
             if let Some(v) = result["delays_ms_signed"].get("ter").and_then(|x| x.as_i64()) { result["delays_ms_positive"]["ter"] = serde_json::json!(v + g as i64); }
 
-            // Optional videodiff
             if let (Some(vp), Some(rv), Some(ov)) = (videodiff.as_ref(), ref_video_path.as_ref(), other_video_path.as_ref()) {
-                let vd = run_videodiff(vp, rv, ov).expect("videodiff");
+                let vd = vsg_core::analyze::videodiff::run_videodiff(vp, rv, ov).expect("videodiff");
                 result["method"] = serde_json::json!("videodiff");
                 result["delays_ms_signed"]["sec"] = serde_json::json!(vd.delay_ms);
                 if let (Some(lo), Some(hi)) = (err_min, err_max) {
