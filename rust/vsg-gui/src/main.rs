@@ -10,9 +10,15 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
+use glutin::prelude::*;
+use glutin_winit::DisplayBuilder;
+use glutin::config::ConfigTemplateBuilder;
+use glutin::context::{ContextAttributesBuilder, NotCurrentGlContextSurfaceAccessor};
+use glutin::display::Display;
+use glutin::surface::{Surface, SurfaceAttributesBuilder, WindowSurface};
+
 use vsg_core::analyze::audio_xcorr::{analyze_audio_xcorr_detailed, Band, Method, StereoMode, XCorrParams};
 use vsg_core::extract::run::run_mkvextract;
-use vsg_core::fsutil::{default_output_dir, default_work_dir};
 use vsg_core::model::{SelectionEntry, SelectionManifest, Source};
 
 mod config;
@@ -61,12 +67,7 @@ fn pick_ext_from_codec(codec: &str) -> &'static str {
         "flac" | "a_flac" => "flac",
         "opus" | "a_opus" => "opus",
         "vorbis" | "a_vorbis" => "ogg",
-        other => {
-            if other.contains("opus") { "opus" }
-            else if other.contains("flac") { "flac" }
-            else if other.contains("ac-3") { "ac3" }
-            else { "bin" }
-        }
+        _ => "bin"
     }
 }
 
@@ -82,9 +83,9 @@ fn build_manifest(ref_file:&str, sec_file:Option<&str>, ter_file:Option<&str>) -
             r#type: "audio".into(),
             language: Some(lang.clone()),
             codec: Some(codec.clone()),
-            container_index: 0,
+            container_index: Some(0),
             name: None,
-            source: Source::Ref,
+            source: Source::REF,
         });
     }
     let target_lang = ref_first_lang;
@@ -105,7 +106,7 @@ fn build_manifest(ref_file:&str, sec_file:Option<&str>, ter_file:Option<&str>) -
                 r#type:"audio".into(),
                 language: Some(lang),
                 codec: Some(codec),
-                container_index: 0,
+                container_index: Some(0),
                 name: None,
                 source,
             } ])
@@ -114,8 +115,8 @@ fn build_manifest(ref_file:&str, sec_file:Option<&str>, ter_file:Option<&str>) -
         }
     };
 
-    let sec_entries = pick_side(sec_file, Source::Sec)?;
-    let ter_entries = pick_side(ter_file, Source::Ter)?;
+    let sec_entries = pick_side(sec_file, Source::SEC)?;
+    let ter_entries = pick_side(ter_file, Source::TER)?;
 
     Ok(SelectionManifest{ ref_tracks: ref_entries, sec_tracks: sec_entries, ter_tracks: ter_entries })
 }
@@ -156,22 +157,46 @@ fn first_audio_under(dir:&Path) -> Option<String> {
 }
 
 fn main() -> Result<()> {
-    // --- imgui + winit setup for winit 0.28 ---
-    let event_loop = EventLoop::new();
-    let window = WindowBuilder::new()
-        .with_title("VSG GUI - Analyze")
-        .with_inner_size(LogicalSize::new(1100.0, 700.0))
-        .build(&event_loop)?;
+    // --- glutin + winit 0.29 setup ---
+    let event_loop = EventLoop::new()?;
+
+    let template = ConfigTemplateBuilder::new().with_alpha_size(8).with_transparency(false);
+    let display_builder = DisplayBuilder::new().with_window_attributes(Some(
+        WindowBuilder::new()
+            .with_title("VSG GUI - Analyze")
+            .with_inner_size(LogicalSize::new(1100.0, 700.0))
+    ));
+
+    let (window, gl_config) = display_builder.build(&event_loop, template, |configs| {
+        // Just pick the first config; for production choose better
+        configs.reduce(|acc, cfg| if cfg.num_samples() < acc.num_samples() { cfg } else { acc }).unwrap()
+    })?;
+
+    let window = window.expect("winit window");
+    let raw_display = Display::new(window.raw_display_handle(), window.raw_window_handle())?;
+
+    let context_attributes = ContextAttributesBuilder::new().build(Some(window.raw_window_handle()));
+    let not_current = unsafe { raw_display.create_context(&gl_config, &context_attributes)? };
+    let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+        window.raw_window_handle(),
+        NonZeroU32::new(1100).unwrap(),
+        NonZeroU32::new(700).unwrap(),
+    );
+    use std::num::NonZeroU32;
+    let surface = unsafe { raw_display.create_window_surface(&gl_config, &attrs)? };
+    let context = not_current.make_current(&surface)?;
+
+    // glow + imgui
+    let gl = unsafe {
+        glow::Context::from_loader_function(|s| raw_display.get_proc_address(&std::ffi::CString::new(s).unwrap()) as *const _)
+    };
 
     let mut imgui = imgui::Context::create();
     imgui.set_ini_filename(None);
-    let mut platform = WinitPlatform::new(&mut imgui);
+    let mut platform = WinitPlatform::init(&mut imgui);
     platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
-
-    let mut renderer = {
-        imgui_glow_renderer::AutoRenderer::initialize(glow::Context::from_loader_function(|s| window.get_proc_address(s) as *const _), &mut imgui)
-            .map_err(|e| anyhow!("renderer init: {:?}", e))?
-    };
+    let mut renderer = imgui_glow_renderer::AutoRenderer::initialize(gl, &mut imgui)
+        .map_err(|e| anyhow!("renderer init: {:?}", e))?;
 
     // settings
     let settings_path = exe_dir().join("vsg_settings.json");
@@ -181,16 +206,15 @@ fn main() -> Result<()> {
 
     let mut log_lines: Vec<String> = Vec::new();
     let mut busy = false;
-    let mut last_result: Option<String> = None;
 
     let mut last_frame = Instant::now();
-    event_loop.run(move |event, _, control_flow| {
+    event_loop.run(move |event, elwt| {
         platform.handle_event(imgui.io_mut(), &window, &event);
         match event {
-            Event::MainEventsCleared => {
+            Event::AboutToWait => {
                 window.request_redraw();
             }
-            Event::RedrawRequested(_) => {
+            Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
                 let io = imgui.io_mut();
                 let delta = last_frame.elapsed();
                 io.update_delta_time(delta);
@@ -244,7 +268,7 @@ fn main() -> Result<()> {
                             busy = true;
                             log_lines.push("Starting analysis...".into());
                             let s = settings.clone();
-                            // Spawn worker thread
+                            // Spawn worker
                             std::thread::spawn(move || {
                                 let run = || -> Result<String> {
                                     // Resolve dirs
@@ -306,7 +330,7 @@ fn main() -> Result<()> {
                                         min_match: 0.8, stereo_mode: stereo, method, band
                                     };
 
-                                    // Duration: ffprobe
+                                    // Duration via ffprobe
                                     let dur = {
                                         let out = std::process::Command::new("ffprobe")
                                             .args(["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1"])
@@ -336,7 +360,7 @@ fn main() -> Result<()> {
                                         results["runs"]["ter"] = json!({"language": null, "language_matched": null, "chunks": chunks, "summary": summary});
                                     }
 
-                                    // Final block
+                                    // Final
                                     let mut delays = vec![];
                                     if let Some(ms) = results["runs"]["sec"]["summary"]["median_delay_ms"].as_i64() { delays.push(ms); }
                                     if let Some(ms) = results["runs"]["ter"]["summary"]["median_delay_ms"].as_i64() { delays.push(ms); }
@@ -375,15 +399,18 @@ fn main() -> Result<()> {
 
                 platform.prepare_render(&imgui, &window);
                 renderer.render(imgui.render()).unwrap();
+
+                // swap buffers
+                surface.swap_buffers(&context).ok();
             }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 // Save settings on exit
                 let _ = std::fs::write(exe_dir().join("vsg_settings.json"), serde_json::to_string_pretty(&settings).unwrap());
-                *control_flow = winit::event_loop::ControlFlow::Exit;
+                elwt.exit();
             }
             _ => {}
         }
-    });
+    })?;
 
     #[allow(unreachable_code)]
     Ok(())
