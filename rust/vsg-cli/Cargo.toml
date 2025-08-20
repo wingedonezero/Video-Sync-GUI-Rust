@@ -1,9 +1,10 @@
 [package]
-name="vsg-cli"
-version="0.2.0"
-edition="2021"
+name = "vsg-cli"
+version = "0.2.0"
+edition = "2021"
 
 [dependencies]
-vsg-core={path="../vsg-core"}
-serde_json="1"
-clap={version="4",features=["derive"]}
+vsg-core = { path = "../vsg-core" }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+clap = { version = "4", features = ["derive"] }

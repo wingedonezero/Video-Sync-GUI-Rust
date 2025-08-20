@@ -2,24 +2,24 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::fs;
 use std::collections::HashMap;
-use std::process::Command;
+use std::process::Command as PCommand;
 use vsg_core::probe::load_probe;
 use vsg_core::extract::select::Defaults;
 use vsg_core::extract::run::run_mkvextract;
 use vsg_core::fsutil::{default_work_dir, default_output_dir};
 use vsg_core::analyze::audio_xcorr::{analyze_audio_xcorr, XCorrParams};
 use vsg_core::analyze::videodiff::run_videodiff;
-use vsg_core::model::{SelectionManifest, SelectionEntry};
+use vsg_core::model::SelectionManifest;
 
 #[derive(Parser, Debug)]
 #[command(name="vsg", version, about="Video-Sync-GUI-Rust CLI")]
 struct Cli {
     #[command(subcommand)]
-    cmd: Command,
+    cmd: SubCmd,
 }
 
 #[derive(Subcommand, Debug)]
-enum Command {
+enum SubCmd {
     /// Step 1: extraction (selection + mkvextract)
     Extract {
         /// Optional manifest: if provided, we ignore --ref/--sec/--ter flags and run mkvextract using this manifest
@@ -85,7 +85,7 @@ struct ProbeTrack { id:u32, #[serde(rename="type")] kind:String, codec_id:Option
 struct ProbeFile { tracks:Vec<ProbeTrack> }
 
 fn mkvmerge_probe_json(input:&str) -> ProbeFile {
-    let out = Command::new("mkvmerge").arg("-J").arg(input).output().expect("spawn mkvmerge -J");
+    let out = PCommand::new("mkvmerge").arg("-J").arg(input).output().expect("spawn mkvmerge -J");
     if !out.status.success() {
         panic!("mkvmerge -J failed: {}", String::from_utf8_lossy(&out.stderr));
     }
@@ -142,7 +142,7 @@ fn extract_from_manifest(manifest_path:&PathBuf, work:&PathBuf) {
 fn main() {
     let cli = Cli::parse();
     match cli.cmd {
-        Command::Extract { manifest, ref_file, sec_file, ter_file, ref_probe, sec_probe, ter_probe, work_dir, out_dir, keep_temp } => {
+        SubCmd::Extract { manifest, ref_file, sec_file, ter_file, ref_probe, sec_probe, ter_probe, work_dir, out_dir, keep_temp } => {
             let work = work_dir.unwrap_or_else(|| default_work_dir());
             let _out = out_dir.unwrap_or_else(|| default_output_dir());
             fs::create_dir_all(&work).expect("create work dir");
@@ -181,7 +181,7 @@ fn main() {
                 println!("Selection manifest: {}", sel_path.to_string_lossy());
             }
         }
-        Command::Analyze { ref_audio_path, sec_audio_path, ter_audio_path, chunks, chunk_dur, sample_rate, min_match, duration_s, videodiff, ref_video_path, other_video_path, err_min, err_max, work_dir, keep_temp:_ } => {
+        SubCmd::Analyze { ref_audio_path, sec_audio_path, ter_audio_path, chunks, chunk_dur, sample_rate, min_match, duration_s, videodiff, ref_video_path, other_video_path, err_min, err_max, work_dir, keep_temp:_ } => {
             let work = work_dir.unwrap_or_else(|| default_work_dir());
             let mut manifest_dir = work.clone(); manifest_dir.push("manifest");
             fs::create_dir_all(&manifest_dir).expect("manifest dir");
