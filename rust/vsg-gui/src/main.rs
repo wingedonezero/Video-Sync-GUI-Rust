@@ -1,359 +1,420 @@
-//! Minimal IMGUI shell on winit 0.30 + glutin 0.32 + glow.
-//! - Uses ApplicationHandler / run_app (winit 0.30).
-//! - Creates GL context via glutin 0.32 (EGL/GLX chosen by platform).
-//! - Integrates imgui-winit-support 0.13 + imgui-glow-renderer 0.13.
-//! - Wires "Analysis mode" button to call into vsg-core paths (stubs call sites, real work stays in core).
-
+use std::{num::NonZeroU32, path::{Path, PathBuf}, process::Command};
 use anyhow::{Context, Result};
-use imgui::{Condition, Ui};
+use imgui::{ComboBox, Condition, Ui};
+use imgui_glow_renderer as imgui_gl;
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use log::*;
-use std::path::{Path, PathBuf};
-use winit::application::ApplicationHandler;
-use winit::event::{DeviceEvent, DeviceId, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::{Window, WindowAttributes};
-
-use glutin::config::ConfigTemplateBuilder;
-use glutin::display::{Display, DisplayApiPreference};
-use glutin::prelude::*;
-use glutin::surface::{Surface, SurfaceAttributesBuilder, WindowSurface};
-
 use glow::HasContext as _;
+use serde::Deserialize;
+use serde_json::json;
+use winit::{
+    dpi::LogicalSize,
+    event::{Event, WindowEvent},
+    event_loop::EventLoop,
+    window::WindowBuilder,
+};
+use glutin::{
+    prelude::*,
+    config::ConfigTemplateBuilder,
+    context::ContextAttributesBuilder,
+    surface::{Surface, SurfaceAttributesBuilder, WindowSurface},
+};
+use glutin_winit::DisplayBuilder;
 
+// vsg-core
+use vsg_core::extract::run::run_mkvextract;
+use vsg_core::fsutil::{ensure_dir, default_work_dir, default_output_dir};
 use vsg_core::model::{SelectionEntry, SelectionManifest, Source};
-use vsg_core::extract::run::run_mkvextract; // returns ExtractSummary
-use vsg_core::fsutil::{default_output_dir, default_work_dir};
-use vsg_core::analyze::audio_xcorr::{analyze_pair, XCorrParams}; // assume exists
-
-// ---------------- GUI State ----------------
+use vsg_core::analyze::audio_xcorr::{
+    analyze_audio_xcorr_detailed, XCorrParams, Method, StereoMode, Band,
+};
 
 #[derive(Default)]
-struct GuiState {
-    window: Option<Window>,
-    gl_display: Option<Display>,
-    gl_surface: Option<Surface<WindowSurface>>,
-    gl_context: Option<glutin::context::PossiblyCurrentContext>,
-    gl: Option<glow::Context>,
-
-    imgui: Option<imgui::Context>,
-    platform: Option<WinitPlatform>,
-    renderer: Option<imgui_glow_renderer::AutoRenderer>,
-
-    // Inputs
+struct AppState {
     ref_path: String,
     sec_path: String,
     ter_path: String,
     work_dir: String,
     out_dir: String,
 
-    // Analysis params (defaults)
+    // xcorr options
     chunks: u32,
     chunk_ms: u32,
-    sample_rate: String, // "s48000" etc
-    min_match: f32,
-    use_videodiff: bool,
+    sample_rate: String, // "s24000", "s48000"
+    method: usize,       // 0 = FFTPeak, 1 = CoarseRefine, 2 = RMSEdge, 3 = Hybrid
+    stereo: usize,       // 0 = MixDown, 1 = Left, 2 = Right
+    band: usize,         // 0 = Full, 1 = Voice
 
-    // Log text (live)
-    log_lines: Vec<String>,
+    log: String,
+    running: bool,
 }
 
-impl GuiState {
-    fn log(&mut self, s: impl Into<String>) {
-        let line = s.into();
-        info!("{line}");
-        self.log_lines.push(line);
-        if self.log_lines.len() > 2000 {
-            self.log_lines.drain(..1000);
-        }
-    }
-}
-
-// ---------------- Utility (selection manifest builders) ----------------
-
-fn make_entry(file: &str, id: u32, lang: Option<&str>, codec: Option<&str>, source: Source) -> SelectionEntry {
-    SelectionEntry {
-        file_path: file.into(),
-        track_id: id,
-        r#type: "audio".into(),
-        language: lang.map(|s| s.to_string()),
-        codec: codec.map(|s| s.to_string()),
-        // keep alignment with core model
-        container_index: Some(0),
-        name: None,
-        source,
-    }
-}
-
-fn build_manifest(ref_file: &str, sec_file: Option<&str>, ter_file: Option<&str>) -> SelectionManifest {
-    // We default to picking track id 0 for now — the CLI path already does probing & selection.
-    // GUI will later call the same probe to populate real choices.
-    let mut ref_entries = vec![make_entry(ref_file, 0, None, None, Source::REF)];
-    let mut sec_entries = vec![];
-    let mut ter_entries = vec![];
-    if let Some(sf) = sec_file {
-        sec_entries.push(make_entry(sf, 0, None, None, Source::SEC));
-    }
-    if let Some(tf) = ter_file {
-        ter_entries.push(make_entry(tf, 0, None, None, Source::TER));
-    }
-    SelectionManifest { ref_entries, sec_entries, ter_entries }
-}
-
-fn to_path(s: &str) -> PathBuf { PathBuf::from(s) }
-
-// ---------------- Application Handler ----------------
-
-struct App {
-    state: GuiState,
-}
-
-impl App {
+impl AppState {
     fn new() -> Self {
-        let mut st = GuiState::default();
-        st.work_dir = default_work_dir().to_string_lossy().to_string();
-        st.out_dir = default_output_dir().to_string_lossy().to_string();
-        st.chunks = 10;
-        st.chunk_ms = 12000;
-        st.sample_rate = "s48000".into();
-        st.min_match = 0.4;
-        st.use_videodiff = false;
-        App { state: st }
+        Self {
+            work_dir: default_work_dir().to_string_lossy().to_string(),
+            out_dir: default_output_dir().to_string_lossy().to_string(),
+            chunks: 10,
+            chunk_ms: 6000,
+            sample_rate: "s48000".into(),
+            method: 3,
+            stereo: 0,
+            band: 0,
+            ..Default::default()
+        }
     }
-
-    fn init_gl(
-        &mut self,
-        el: &dyn ActiveEventLoop,
-    ) -> Result<()> {
-        // Create window
-        let attrs = WindowAttributes::default()
-        .with_title("Video Sync GUI (winit 0.30 + imgui)")
-        .with_inner_size(winit::dpi::LogicalSize::new(1280.0, 720.0));
-        let window = el.create_window(attrs).context("create window")?;
-
-        // Choose config
-        let template = ConfigTemplateBuilder::new();
-        let display = unsafe {
-            // Prefer EGL then GLX on Linux (glutin picks appropriate)
-            Display::new(window.display_handle().as_raw(), DisplayApiPreference::EglThenGlx)?
-        };
-
-        let config = display
-        .find_configs(template)
-        .context("find GL configs")?
-        .next()
-        .context("no GL configs")?;
-
-        // Build GL context and surface
-        let window_handle = window.window_handle().as_raw();
-        let surface_attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(window_handle, 0, 0);
-        let surface = unsafe { display.create_window_surface(&config, &surface_attrs)? };
-
-        let ctx_attrs = glutin::context::ContextAttributesBuilder::new().build(Some(window_handle));
-        let not_current = unsafe { display.create_context(&config, &ctx_attrs)? };
-        let context = not_current.make_current(&surface).context("make_current")?;
-
-        // Load GL
-        let gl = unsafe {
-            glow::Context::from_loader_function(|s| display.get_proc_address(&std::ffi::CString::new(s).unwrap()) as *const _)
-        };
-
-        self.state.window = Some(window);
-        self.state.gl_display = Some(display);
-        self.state.gl_surface = Some(surface);
-        self.state.gl_context = Some(context);
-        self.state.gl = Some(gl);
-        Ok(())
+    fn logln(&mut self, s: impl AsRef<str>) {
+        use std::fmt::Write;
+        let _ = writeln!(self.log, "{}", s.as_ref());
     }
+}
 
-    fn init_imgui(&mut self) -> Result<()> {
-        let mut imgui = imgui::Context::create();
-        imgui.set_ini_filename(None);
-        let mut platform = WinitPlatform::new(&mut imgui);
-        platform.set_high_dpi_mode(HiDpiMode::Default);
+/* -------- mkvmerge probing to choose tracks ---------- */
 
-        let window = self.state.window.as_ref().unwrap();
-        platform.attach_window(imgui.io_mut(), window, imgui_winit_support::HiDpiMode::Default);
+#[derive(Debug, Deserialize)]
+struct ProbeFile { tracks: Vec<ProbeTrack> }
+#[derive(Debug, Deserialize)]
+struct ProbeTrack {
+    id: u32,
+    #[serde(rename="type")]
+    kind: String,
+    #[serde(default)]
+    codec_id: Option<String>,
+    #[serde(default)]
+    codec: Option<String>,
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    properties: Option<ProbeProps>,
+}
+#[derive(Debug, Deserialize)]
+struct ProbeProps {
+    #[serde(default)]
+    language: Option<String>,
+    #[serde(default)]
+    codec_id: Option<String>,
+}
 
-        let gl = self.state.gl.as_ref().unwrap();
-        let renderer = unsafe { imgui_glow_renderer::AutoRenderer::initialize(&mut imgui, gl)? };
+fn find_tool(name: &str) -> Result<PathBuf> {
+    which::which(name).with_context(|| format!("finding tool {}", name))
+}
 
-        self.state.imgui = Some(imgui);
-        self.state.platform = Some(platform);
-        self.state.renderer = Some(renderer);
-        Ok(())
+fn probe_tracks(path: &str) -> Result<ProbeFile> {
+    let mkvmerge = find_tool("mkvmerge")?;
+    let out = Command::new(mkvmerge)
+    .arg("-J").arg(path)
+    .output()
+    .with_context(|| "spawn mkvmerge -J")?;
+    if !out.status.success() {
+        anyhow::bail!("mkvmerge -J failed: {}", String::from_utf8_lossy(&out.stderr));
     }
+    let txt = String::from_utf8(out.stdout).context("utf8 mkvmerge json")?;
+    let pf: ProbeFile = serde_json::from_str(&txt).context("parse mkvmerge -J json")?;
+    Ok(pf)
+}
 
-    fn draw_ui(&mut self, ui: &Ui) {
-        ui.window("Analysis (extract+xcorr)")
-        .size([560.0, 380.0], Condition::FirstUseEver)
-        .build(|| {
-            ui.input_text("REF path", &mut self.state.ref_path).build();
-            ui.input_text("SEC path", &mut self.state.sec_path).build();
-            ui.input_text("TER path", &mut self.state.ter_path).build();
-            ui.input_text("Work dir", &mut self.state.work_dir).build();
-            ui.input_text("Output dir", &mut self.state.out_dir).build();
+fn pick_audio_track_id(pf: &ProbeFile, prefer_lang: Option<&str>) -> Option<(u32, String, Option<String>)> {
+    let mut audios: Vec<&ProbeTrack> = pf.tracks.iter().filter(|t| t.kind == "audio").collect();
+    if let Some(lang) = prefer_lang {
+        if let Some(t) = audios.iter().copied().find(|t| {
+            let l = t.language.as_deref()
+            .or_else(|| t.properties.as_ref().and_then(|p| p.language.as_deref()))
+            .unwrap_or("und");
+            l.eq_ignore_ascii_case(lang)
+        }) {
+            let codec = t.codec_id.clone().or(t.codec.clone()).or_else(|| t.properties.as_ref().and_then(|p| p.codec_id.clone()));
+            return Some((t.id, language_of(t), codec));
+        }
+    }
+    if let Some(t) = audios.first().copied() {
+        let codec = t.codec_id.clone().or(t.codec.clone()).or_else(|| t.properties.as_ref().and_then(|p| p.codec_id.clone()));
+        return Some((t.id, language_of(t), codec));
+    }
+    None
+}
 
-            ui.separator();
-            ui.text("Correlation params");
-            ui.input_int("chunks (10 == full spread)", &mut (self.state.chunks as i32))
-            .build();
-            ui.input_int("chunk ms", &mut (self.state.chunk_ms as i32)).build();
-            ui.input_text("sample rate (s48000/s24000/s12000)", &mut self.state.sample_rate).build();
-            ui.slider_config("min match", 0.0, 1.0).build(&mut self.state.min_match);
-            ui.checkbox("videodiff (optional second pass)", &mut self.state.use_videodiff);
+fn language_of(t: &ProbeTrack) -> String {
+    t.language.as_deref()
+    .or_else(|| t.properties.as_ref().and_then(|p| p.language.as_deref()))
+    .unwrap_or("und").to_string()
+}
 
-            if ui.button("Run analysis") {
-                self.state.log("Starting analysis…");
-                if let Err(e) = self.run_analysis() {
-                    self.state.log(format!("ERROR: {e:#}"));
-                }
-            }
+fn codec_ext_hint(codec: Option<&str>) -> &'static str {
+    let c = codec.unwrap_or("").to_ascii_lowercase();
+    match c.as_str() {
+        "aac" | "a_aac" | "mp4a" | "a_aac_mpeg2lc" | "a_aac_mpeg4lc" => "aac",
+        "ac3" | "a_ac3" => "ac3",
+        "eac3" | "e-ac-3" | "a_eac3" | "a_e-ac-3" => "eac3",
+        "dts" | "a_dts" | "a_dts_hd" | "a_dts-x" => "dts",
+        "truehd" | "a_truehd" => "thd",
+        "flac" | "a_flac" => "flac",
+        "opus" | "a_opus" => "opus",
+        "vorbis" | "a_vorbis" => "ogg",
+        _ => "bin",
+    }
+}
+
+fn build_manifest(ref_path:&str, sec_path:Option<&str>, ter_path:Option<&str>) -> Result<(SelectionManifest, String, Option<String>, Option<String>)> {
+    let pref_lang = {
+        let ref_pf = probe_tracks(ref_path)?;
+        let (_, lang, _) = pick_audio_track_id(&ref_pf, None).context("no audio in REF")?;
+        lang
+    };
+
+    let mut entries: Vec<SelectionEntry> = Vec::new();
+    // REF
+    let ref_pf = probe_tracks(ref_path)?;
+    let (ref_id, ref_lang, ref_codec) = pick_audio_track_id(&ref_pf, None).context("no audio in REF")?;
+    entries.push(SelectionEntry{
+        file_path: ref_path.into(),
+                 track_id: ref_id,
+                 r#type: "audio".into(),
+                 language: Some(ref_lang.clone()),
+                 codec: ref_codec.clone(),
+                 container_index: Some(0),
+                 name: None,
+                 source: Source::REF
+    });
+
+    // SEC
+    let mut sec_lang = None;
+    if let Some(sp) = sec_path {
+        let sec_pf = probe_tracks(sp)?;
+        let (id, lang, codec) = pick_audio_track_id(&sec_pf, Some(&pref_lang)).unwrap_or_else(|| {
+            pick_audio_track_id(&sec_pf, None).expect("no SEC audio")
         });
-
-        ui.window("Live Log")
-        .size([680.0, 380.0], Condition::FirstUseEver)
-        .position([580.0, 20.0], Condition::FirstUseEver)
-        .build(|| {
-            for line in &self.state.log_lines {
-                ui.text_wrapped(line);
-            }
+        sec_lang = Some(lang.clone());
+        entries.push(SelectionEntry{
+            file_path: sp.into(),
+                     track_id: id,
+                     r#type: "audio".into(),
+                     language: Some(lang),
+                     codec,
+                     container_index: Some(0),
+                     name: None,
+                     source: Source::SEC
         });
     }
 
-    fn run_analysis(&mut self) -> Result<()> {
-        let work = to_path(&self.state.work_dir);
-        let out = to_path(&self.state.out_dir);
-        std::fs::create_dir_all(&work).ok();
-        std::fs::create_dir_all(&out).ok();
-
-        let have_ref = !self.state.ref_path.is_empty();
-        if !have_ref {
-            anyhow::bail!("REF path is empty");
-        }
-        let sel = build_manifest(
-            &self.state.ref_path,
-            (!self.state.sec_path.is_empty()).then(|| self.state.sec_path.as_str()),
-                                 (!self.state.ter_path.is_empty()).then(|| self.state.ter_path.as_str()),
-        );
-
-        // Extract (respect our rule to use mkvextract)
-        self.state.log("Extracting tracks via mkvextract…");
-        let summary = run_mkvextract(&sel, &work).context("mkvextract")?;
-        self.state.log(format!("Extracted: {:?}", summary.outputs));
-
-        // Pick first audio under each dir (core helper already does this in CLI; we mirror simply here)
-        let ref_audio = first_audio_under(&work.join("ref")).context("ref audio not found")?;
-        let sec_audio = first_audio_under(&work.join("sec")).ok();
-        let ter_audio = first_audio_under(&work.join("ter")).ok();
-
-        // Correlation params
-        let params = XCorrParams {
-            chunks: self.state.chunks as usize,
-            chunk_ms: self.state.chunk_ms as usize,
-            sample_rate_flag: self.state.sample_rate.clone(),
-            min_match: self.state.min_match,
-        };
-
-        // SEC pass
-        if let Some(sec) = &sec_audio {
-            self.state.log(format!("Analyzing REF vs SEC: {:?} vs {:?}", ref_audio, sec));
-            let result = analyze_pair(&ref_audio, sec, &params)
-            .context("xcorr REF vs SEC")?;
-            self.state.log(format!("SEC result: global_offset_ns={} ns, matches={}", result.global_offset_ns, result.matches.len()));
-            // TODO save JSON to binary dir like CLI
-        } else {
-            self.state.log("No SEC audio extracted; skipping.");
-        }
-
-        // TER pass
-        if let Some(ter) = &ter_audio {
-            self.state.log(format!("Analyzing REF vs TER: {:?} vs {:?}", ref_audio, ter));
-            let result = analyze_pair(&ref_audio, ter, &params)
-            .context("xcorr REF vs TER")?;
-            self.state.log(format!("TER result: global_offset_ns={} ns, matches={}", result.global_offset_ns, result.matches.len()));
-        } else {
-            self.state.log("No TER audio extracted; skipping.");
-        }
-
-        Ok(())
-    }
-}
-
-// Small helper: mirror CLI’s “first audio” pick
-fn first_audio_under(dir: &Path) -> Option<PathBuf> {
-    let mut candidates = std::fs::read_dir(dir).ok()?
-    .filter_map(|e| e.ok())
-    .map(|e| e.path())
-    .filter(|p| {
-        if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
-            matches!(ext, "aac" | "ac3" | "eac3" | "dts" | "thd" | "flac" | "opus" | "ogg" | "mka" | "wav")
-        } else { false }
-    })
-    .collect::<Vec<_>>();
-    candidates.sort();
-    candidates.into_iter().next()
-}
-
-// ---- ApplicationHandler impl
-
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &dyn ActiveEventLoop) {
-        if self.state.window.is_none() {
-            if let Err(e) = self.init_gl(event_loop)
-                .and_then(|_| self.init_imgui()) {
-                    eprintln!("Failed to init GUI: {e:#}");
-                    event_loop.exit();
-                    return;
-                }
-        }
+    // TER
+    let mut ter_lang = None;
+    if let Some(tp) = ter_path {
+        let ter_pf = probe_tracks(tp)?;
+        let (id, lang, codec) = pick_audio_track_id(&ter_pf, Some(&pref_lang)).unwrap_or_else(|| {
+            pick_audio_track_id(&ter_pf, None).expect("no TER audio")
+        });
+        ter_lang = Some(lang.clone());
+        entries.push(SelectionEntry{
+            file_path: tp.into(),
+                     track_id: id,
+                     r#type: "audio".into(),
+                     language: Some(lang),
+                     codec,
+                     container_index: Some(0),
+                     name: None,
+                     source: Source::TER
+        });
     }
 
-    fn window_event(&mut self, _el: &dyn ActiveEventLoop, _id: winit::window::WindowId, event: WindowEvent) {
-        if let (Some(window), Some(imgui), Some(platform), Some(renderer), Some(gl), Some(surface), Some(ctx)) =
-            (self.state.window.as_ref(), self.state.imgui.as_mut(), self.state.platform.as_mut(),
-             self.state.renderer.as_mut(), self.state.gl.as_ref(), self.state.gl_surface.as_ref(), self.state.gl_context.as_ref())
-            {
-                platform.handle_event(imgui.io_mut(), window, &event);
+    let manifest = SelectionManifest { entries };
+    Ok((manifest, ref_lang, sec_lang, ter_lang))
+}
 
-                match event {
-                    WindowEvent::CloseRequested => {
-                        _el.exit();
-                    }
-                    WindowEvent::RedrawRequested => {
-                        // New frame
-                        platform.prepare_frame(imgui.io_mut(), window).unwrap();
-                        let ui = imgui.frame();
-
-                        // UI
-                        self.draw_ui(&ui);
-
-                        // Render
-                        unsafe {
-                            gl.clear_color(0.10, 0.12, 0.15, 1.0);
-                            gl.clear(glow::COLOR_BUFFER_BIT);
-                        }
-                        platform.prepare_render(&ui, window);
-                        let draw_data = ui.render();
-                        renderer.render(draw_data).unwrap();
-                        surface.swap_buffers(ctx).ok();
-                    }
-                    _ => {}
-                }
+fn first_audio_under(dir:&Path) -> Option<PathBuf> {
+    if !dir.exists() { return None; }
+    let mut best: Option<PathBuf> = None;
+    let exts = ["flac","eac3","ac3","dts","thd","opus","ogg","aac","bin"];
+    for e in exts {
+        if let Some(p) = std::fs::read_dir(dir).ok()
+            .and_then(|rd| rd.filter_map(|e| e.ok()).map(|e| e.path()).find(|p| p.extension().map(|x| x==e).unwrap_or(false))) {
+                best = Some(p);
+                break;
             }
     }
-
-    fn device_event(&mut self, _el: &dyn ActiveEventLoop, _id: DeviceId, _event: DeviceEvent) {}
+    best
 }
 
-// ---------------- main ----------------
+/* ---------------- GUI + GL bootstrap ---------------- */
 
 fn main() -> Result<()> {
-    env_logger::init();
-    let event_loop = EventLoop::new().context("event loop")?;
-    event_loop.set_control_flow(ControlFlow::Wait);
+    // window + GL
+    let event_loop = EventLoop::new().context("EventLoop")?;
+    let window_builder = WindowBuilder::new()
+    .with_title("Video Sync (Rust) - Analysis")
+    .with_inner_size(LogicalSize::new(1100.0, 700.0));
 
-    let mut app = App::new();
-    event_loop.run_app(&mut app).context("run_app")?;
+    let template = ConfigTemplateBuilder::new().with_alpha_size(8).with_transparency(true);
+    let display_builder = DisplayBuilder::new().with_window_builder(Some(window_builder));
+    let (maybe_window, gl_config) = display_builder.build(&event_loop, template, |mut configs| {
+        configs.next().expect("no GL configs")
+    })?;
+    let window = maybe_window.expect("winit window");
+
+    let gl_display = gl_config.display();
+    let ctx_attrs = ContextAttributesBuilder::new().build(Some(window.raw_window_handle()));
+    let not_current = unsafe { gl_display.create_context(&gl_config, &ctx_attrs)? };
+
+    let size = window.inner_size();
+    let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+        window.raw_window_handle(),
+                                                                       NonZeroU32::new(size.width.max(1)).unwrap(),
+                                                                       NonZeroU32::new(size.height.max(1)).unwrap(),
+    );
+    let surface = unsafe { gl_display.create_window_surface(&gl_config, &attrs)? };
+    let gl_context = not_current.make_current(&surface)?;
+
+    let gl = unsafe {
+        glow::Context::from_loader_function(|s| gl_display.get_proc_address(s) as *const _)
+    };
+
+    // imgui
+    let mut imgui = imgui::Context::create();
+    imgui.set_ini_filename(None);
+    let mut platform = WinitPlatform::init(&mut imgui);
+    platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
+
+    let mut renderer = imgui_gl::AutoRenderer::initialize(&mut imgui, &gl, |s| {
+        gl_display.get_proc_address(s) as *const _
+    }).expect("renderer");
+
+    // state
+    let mut state = AppState::new();
+
+    // UI loop
+    event_loop.run(move |event, _, control_flow| {
+        match event {
+            Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
+                *control_flow = winit::event_loop::ControlFlow::Exit
+            }
+            Event::MainEventsCleared => window.request_redraw(),
+                   Event::RedrawRequested(_) => {
+                       platform.prepare_frame(imgui.io_mut(), &window).unwrap();
+                       let ui = imgui.frame();
+                       draw_ui(&ui, &mut state);
+
+                       // render
+                       unsafe {
+                           gl.clear_color(0.12, 0.12, 0.13, 1.0);
+                           gl.clear(glow::COLOR_BUFFER_BIT);
+                       }
+                       platform.prepare_render(&ui, &window);
+                       let draw_data = ui.render();
+                       renderer.render(draw_data).unwrap();
+                       surface.swap_buffers(&gl_context).unwrap();
+                   }
+                   _ => {}
+        }
+    });
+}
+
+fn draw_ui(ui:&Ui, s:&mut AppState) {
+    use imgui::*;
+
+    Window::new("Analysis (Audio XCorr)")
+    .size([1050.0, 500.0], Condition::FirstUseEver)
+    .build(ui, || {
+        ui.input_text("REF (MKV)", &mut s.ref_path).build();
+        ui.input_text("SEC (MKV)", &mut s.sec_path).build();
+        ui.input_text("TER (MKV)", &mut s.ter_path).build();
+        ui.separator();
+        ui.input_text("Work dir", &mut s.work_dir).build();
+        ui.input_text("Output dir", &mut s.out_dir).build();
+
+        ui.separator();
+        ui.text("Cross-correlation options:");
+        ui.input_int("Chunks (spanned)", &mut (s.chunks as i32)).build();
+        ui.input_int("Chunk ms", &mut (s.chunk_ms as i32)).build();
+        ComboBox::new("Sample rate").build_simple_string(ui, &mut s.sample_rate, &["s24000","s48000"]);
+        ComboBox::new("Method").build_simple_string(ui, &mut s.method, &["FFTPeak","CoarseRefine","RMSEdge","Hybrid"]);
+        ComboBox::new("Stereo").build_simple_string(ui, &mut s.stereo, &["MixDown","Left","Right"]);
+        ComboBox::new("Band").build_simple_string(ui, &mut s.band, &["Full","Voice"]);
+
+        if ui.button("Analyze only") && !s.running {
+            s.running = true;
+            if let Err(e) = do_analyze_only(s) {
+                s.logln(format!("ERROR: {e:#}"));
+            }
+            s.running = false;
+        }
+
+        ui.separator();
+        ui.text("Log:");
+        ChildWindow::new("log").size([0.0, 220.0]).build(ui, || {
+            ui.text_wrapped(&s.log);
+        });
+    });
+}
+
+fn do_analyze_only(s: &mut AppState) -> Result<()> {
+    s.log.clear();
+
+    ensure_dir(&PathBuf::from(&s.work_dir))?;
+    ensure_dir(&PathBuf::from(&s.out_dir))?;
+
+    s.logln("Probing & building selection manifest…");
+    let (manifest, ref_lang, sec_lang, ter_lang) = build_manifest(&s.ref_path, nempty(&s.sec_path), nempty(&s.ter_path))?;
+    s.logln(format!("REF language: {}", ref_lang));
+    if let Some(l) = &sec_lang { s.logln(format!("SEC language: {}", l)); }
+    if let Some(l) = &ter_lang { s.logln(format!("TER language: {}", l)); }
+
+    s.logln("Running mkvextract (analysis mode)…");
+    let work_root = PathBuf::from(&s.work_dir);
+    let summary = run_mkvextract(&manifest, &work_root).context("mkvextract")?;
+    s.logln(format!("Extracted: {:?}", summary));
+
+    let ref_audio = first_audio_under(&work_root.join("ref")).context("ref audio not found")?;
+    let sec_audio = first_audio_under(&work_root.join("sec"));
+    let ter_audio = first_audio_under(&work_root.join("ter"));
+
+    s.logln(format!("ref: {}", ref_audio.display()));
+    if let Some(p) = &sec_audio { s.logln(format!("sec: {}", p.display())); }
+    if let Some(p) = &ter_audio { s.logln(format!("ter: {}", p.display())); }
+
+    let params = XCorrParams {
+        chunks: s.chunks as usize,
+        chunk_ms: s.chunk_ms as usize,
+        sample_rate: s.sample_rate.clone(), // "s24000" | "s48000"
+        method: match s.method { 0=>Method::FFTPeak, 1=>Method::CoarseRefine, 2=>Method::RMSEdge, _=>Method::Hybrid },
+        stereo: match s.stereo { 1=>StereoMode::Left, 2=>StereoMode::Right, _=>StereoMode::MixDown },
+        band: match s.band { 1=>Band::Voice, _=>Band::Full },
+        nanosecond_output: true,
+    };
+
+    let mut results = json!({
+        "meta": {
+            "ref_audio_path": ref_audio,
+            "ref_language": ref_lang,
+            "sec_language": sec_lang.unwrap_or_else(|| "und".to_string()),
+                            "ter_language": ter_lang.unwrap_or_else(|| "und".to_string()),
+                            "chunks": s.chunks,
+                            "chunk_ms": s.chunk_ms,
+                            "sample_rate": s.sample_rate,
+                            "method": s.method,
+                            "stereo": s.stereo,
+                            "band": s.band,
+        },
+        "runs": {}
+    });
+
+    if let Some(sec) = &sec_audio {
+        s.logln("Analyzing REF vs SEC…");
+        let detail = analyze_audio_xcorr_detailed(ref_audio.to_string_lossy().as_ref(), sec.to_string_lossy().as_ref(), &params)
+        .context("xcorr SEC")?;
+        s.logln(format!("SEC Δt (ns): {}", detail.global_fit.ns));
+        results["runs"]["sec"] = serde_json::to_value(detail)?;
+    }
+
+    if let Some(ter) = &ter_audio {
+        s.logln("Analyzing REF vs TER…");
+        let detail = analyze_audio_xcorr_detailed(ref_audio.to_string_lossy().as_ref(), ter.to_string_lossy().as_ref(), &params)
+        .context("xcorr TER")?;
+        s.logln(format!("TER Δt (ns): {}", detail.global_fit.ns));
+        results["runs"]["ter"] = serde_json::to_value(detail)?;
+    }
+
+    let out_path = PathBuf::from(&s.out_dir).join("analysis_results.json");
+    std::fs::write(&out_path, serde_json::to_vec_pretty(&results)?)?;
+    s.logln(format!("Wrote {}", out_path.display()));
     Ok(())
 }
+
+fn nempty(s:&str) -> Option<&str> { if s.trim().is_empty() { None } else { Some(s) } }
