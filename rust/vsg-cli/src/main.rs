@@ -1,4 +1,3 @@
-
 use clap::{Parser, Subcommand, ValueEnum};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,24 +13,20 @@ struct Cli { #[command(subcommand)] cmd: SubCmd }
 
 #[derive(Subcommand, Debug)]
 enum SubCmd {
-    /// Extract selected tracks (REF/SEC/TER) using mkvextract
     Extract {
         #[arg(long)] manifest: Option<PathBuf>,
         #[arg(long)] work_dir: Option<PathBuf>,
         #[arg(long)] out_dir: Option<PathBuf>,
         #[arg(long, default_value_t = false)] keep_temp: bool,
     },
-    /// Analyze audio sync via cross-correlation (per-chunk; ns precision)
     Analyze {
         #[arg(long)] from_manifest: Option<PathBuf>,
         #[arg(long)] ref_audio_path: Option<String>,
         #[arg(long)] sec_audio_path: Option<String>,
         #[arg(long)] ter_audio_path: Option<String>,
-        /// Preferred language (defaults to REF language if omitted)
         #[arg(long)] lang: Option<String>,
         #[arg(long, default_value_t = 10)] chunks: usize,
         #[arg(long, default_value_t = 8.0)] chunk_dur: f64,
-        /// Required: total program duration in seconds (rounded)
         #[arg(long)] duration_s: f64,
         #[arg(long, value_enum, default_value_t = SampleRate::S24000)] sample_rate: SampleRate,
         #[arg(long, value_enum, default_value_t = Stereo::Best)] stereo_mode: Stereo,
@@ -100,10 +95,11 @@ fn main(){
             let work = work_dir.unwrap_or_else(|| default_work_dir());
             let _out = out_dir.unwrap_or_else(|| default_output_dir());
             fs::create_dir_all(&work).expect("create work dir");
-            if let Some(m)=manifest {
+            if let Some(m)=manifest { 
                 let text = fs::read_to_string(&m).expect("read manifest");
                 let mut sel:SelectionManifest = serde_json::from_str(&text).expect("parse manifest");
                 enrich_with_probe(&mut sel);
+                // Save enriched manifest and run extraction
                 let mut manifest_dir = work.clone(); manifest_dir.push("manifest");
                 fs::create_dir_all(&manifest_dir).expect("manifest dir");
                 let mut sel_copy = manifest_dir.clone(); sel_copy.push("selection.json");
@@ -211,6 +207,8 @@ fn main(){
                 band: band.into(),
             };
 
+            let ref_lang_for_match = ref_lang.clone(); // avoid borrowing json later
+
             let mut json = serde_json::json!({
                 "meta": {
                     "ref_audio_path": ref_audio_path,
@@ -230,8 +228,8 @@ fn main(){
                 "final": {}
             });
 
-            // Helper to run one comparison and fill details
-            let run_one = |label:&str, ref_path:&str, other_path:&str, lang:&str, params:&XCorrParams| -> serde_json::Value {
+            // Closure that does NOT capture `json`, avoiding E0502
+            let run_one = |_label:&str, ref_path:&str, other_path:&str, lang:&str, params:&XCorrParams, ref_lang_for_match:&str| -> serde_json::Value {
                 let (res, chunks_vec) = analyze_audio_xcorr_detailed(ref_path, other_path, duration_s, params).expect("xcorr detailed");
                 let chunks: Vec<_> = chunks_vec.iter().map(|c| serde_json::json!({
                     "center_s": c.center_s,
@@ -240,7 +238,7 @@ fn main(){
                     "lag_ms": c.lag_ms,
                     "peak": c.peak
                 })).collect();
-                let matched = !lang.is_empty() && lang == json["meta"]["ref_language"].as_str().unwrap_or("und");
+                let matched = !lang.is_empty() && lang == ref_lang_for_match;
                 serde_json::json!({
                     "language": lang,
                     "language_matched": matched,
@@ -258,14 +256,14 @@ fn main(){
             let mut peaks = serde_json::Map::new();
 
             if let Some(sec) = json["meta"]["sec_audio_path"].as_str() {
-                let entry = run_one("sec", json["meta"]["ref_audio_path"].as_str().unwrap(), sec, json["meta"]["sec_language"].as_str().unwrap_or("und"), &params);
+                let entry = run_one("sec", json["meta"]["ref_audio_path"].as_str().unwrap(), sec, json["meta"]["sec_language"].as_str().unwrap_or("und"), &params, &ref_lang_for_match);
                 delays_ms_signed.insert("sec".into(), entry["summary"]["median_delay_ms"].clone());
                 delays_ns_signed.insert("sec".into(), entry["summary"]["median_delay_ns"].clone());
                 peaks.insert("sec".into(), entry["summary"]["peak_max"].clone());
                 json["runs"]["sec"] = entry;
             }
             if let Some(ter) = json["meta"]["ter_audio_path"].as_str() {
-                let entry = run_one("ter", json["meta"]["ref_audio_path"].as_str().unwrap(), ter, json["meta"]["ter_language"].as_str().unwrap_or("und"), &params);
+                let entry = run_one("ter", json["meta"]["ref_audio_path"].as_str().unwrap(), ter, json["meta"]["ter_language"].as_str().unwrap_or("und"), &params, &ref_lang_for_match);
                 delays_ms_signed.insert("ter".into(), entry["summary"]["median_delay_ms"].clone());
                 delays_ns_signed.insert("ter".into(), entry["summary"]["median_delay_ns"].clone());
                 peaks.insert("ter".into(), entry["summary"]["peak_max"].clone());
