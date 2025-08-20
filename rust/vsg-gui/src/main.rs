@@ -10,14 +10,14 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
-// Bring handle traits into scope for display/window handles
+// Raw handle traits (winit 0.29)
 use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use glutin::prelude::*;
 use glutin_winit::DisplayBuilder;
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::{ContextAttributesBuilder, NotCurrentGlContextSurfaceAccessor};
-use glutin::display::Display;
+use glutin::display::{Display, DisplayApiPreference};
 use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
 
 use vsg_core::analyze::audio_xcorr::{analyze_audio_xcorr_detailed, Band, Method, StereoMode, XCorrParams};
@@ -170,23 +170,25 @@ fn main() -> Result<()> {
             .with_inner_size(LogicalSize::new(1100.0, 700.0))
     ));
 
-    // Avoid version/trait mismatches: select the first config
     let (window, gl_config) = display_builder
         .build(&event_loop, template, |mut configs| configs.next().expect("no GL configs"))
         .map_err(|e| anyhow!("glutin-winit build: {e}"))?;
-
     let window = window.expect("winit window");
 
-    // Use window.display_handle()/window.window_handle() with trait imports above
-    let raw_display = Display::new(window.display_handle(), window.window_handle())
-        .map_err(|e| anyhow!("glutin Display::new: {e}"))?;
+    // Raw handles for glutin 0.31
+    let raw_display = unsafe {
+        Display::new(
+            window.display_handle()?.as_raw(),
+            DisplayApiPreference::EglThenGlx(Some(window.window_handle()?.as_raw()))
+        )?
+    };
 
     use std::num::NonZeroU32;
-    let context_attributes = ContextAttributesBuilder::new().build(Some(window.window_handle()));
+    let context_attributes = ContextAttributesBuilder::new().build(Some(window.window_handle()?.as_raw()));
     let not_current = unsafe { raw_display.create_context(&gl_config, &context_attributes) }
         .map_err(|e| anyhow!("create_context: {e}"))?;
     let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-        window.window_handle(),
+        window.window_handle()?.as_raw(),
         NonZeroU32::new(1100).unwrap(),
         NonZeroU32::new(700).unwrap(),
     );

@@ -4,20 +4,17 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-vsg-core = { path = "../vsg-core" }
-
-imgui = "0.12"
-imgui-winit-support = "0.12"
-imgui-glow-renderer = "0.12"
-
-# Windowing / GL
-winit = { version = "0.29", features = ["x11", "wayland"] }
-glow = "0.13"
-glutin = "0.30"
-glutin-winit = "0.4"
-raw-window-handle = "0.6"
-
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-time = "0.3"
+imgui = "0.12"
+imgui-winit-support = "0.12"
+imgui-glow-renderer = "0.12"
+winit = { version = "0.29", features = ["x11","wayland"] }
+glow = "0.13"
+
+# Pin these to avoid version skew with glutin-winit
+glutin = "=0.31.3"
+glutin-winit = "=0.4.2"
+
+vsg-core = { path = "../vsg-core" }
