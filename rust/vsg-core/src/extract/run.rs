@@ -1,83 +1,74 @@
-use crate::error::VsgError;
-use crate::model::SelectionManifest;
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::process::Command;
+use crate::error::VsgError;
+use crate::types::Source;
 
-fn ensure_dir(p:&PathBuf) -> Result<(),VsgError> { fs::create_dir_all(p).map_err(|e| VsgError::Io(e)) }
-
-pub struct ExtractSummary {
-    pub files: Vec<String>,
+fn extension_for(codec: &str, track_type: &str) -> &'static str {
+    match track_type {
+        "audio" => match codec {
+            "A_AAC" => ".aac",
+            "A_AC3" => ".ac3",
+            "A_EAC3" => ".eac3",
+            "A_DTS" => ".dts",
+            "A_TRUEHD" => ".thd",
+            "A_FLAC" => ".flac",
+            "A_OPUS" => ".opus",
+            "A_VORBIS" => ".ogg",
+            "PCM" => ".wav",
+            _ => ".audio",
+        },
+        "subtitles" => match codec {
+            "S_TEXT/ASS" => ".ass",
+            "S_TEXT/UTF8" => ".srt",
+            "S_HDMV/PGS" => ".sup",
+            _ => ".sub",
+        },
+        "video" => match codec {
+            "V_MPEG4/ISO/AVC" => ".h264",
+            "V_MPEGH/ISO/HEVC" => ".hevc",
+            "V_MS/VFW/FOURCC" => ".vc1",
+            "V_MPEG2" => ".m2v",
+            _ => ".video",
+        },
+        _ => ".bin",
+    }
 }
 
-pub fn run_mkvextract(selection:&SelectionManifest, work_root:&PathBuf) -> Result<ExtractSummary, VsgError> {
-    let mut out_files = Vec::new();
+pub fn run_extract(
+    source: Source,
+    file_path: &str,
+    entries: &[(u32, String, String)], // (track_id, lang, codec)
+    work_dir: &Path,
+) -> Result<(), VsgError> {
+    let out_dir = work_dir.join(match source {
+        Source::Ref => "ref",
+        Source::Sec => "sec",
+        Source::Ter => "ter",
+    });
+    fs::create_dir_all(&out_dir)?;
 
-    // Prepare per-source directories
-    let mut ref_dir = work_root.clone(); ref_dir.push("ref"); ensure_dir(&ref_dir)?;
-    let mut sec_dir = work_root.clone(); sec_dir.push("sec"); ensure_dir(&sec_dir)?;
-    let mut ter_dir = work_root.clone(); ter_dir.push("ter"); ensure_dir(&ter_dir)?;
-
-    // Helper to run a single mkvextract tracks call
-    let run_for = |file_path:&str, entries:&[(u32, String)]| -> Result<(),VsgError> {
-        if entries.is_empty() { return Ok(()); }
-        let mut cmd = Command::new("mkvextract");
-        cmd.arg("tracks").arg(file_path);
-        for (id,out) in entries {
-            cmd.arg(format!("{}:{}", id, out));
+    for (track_id, lang, codec) in entries {
+        let ext = extension_for(codec, if codec.starts_with("A_") || codec == "PCM" {
+            "audio"
+        } else if codec.starts_with("S_") {
+            "subtitles"
+        } else if codec.starts_with("V_") {
+            "video"
+        } else {
+            "bin"
+        });
+        let out_file = out_dir.join(format!("{}_{}.{}{}", format!("{:03}", track_id), "track", lang, ext));
+        let cmd = Command::new("mkvextract")
+            .arg("tracks")
+            .arg(file_path)
+            .arg(format!("{}:{}", track_id, out_file.to_string_lossy()))
+            .status()?;
+        if !cmd.success() {
+            return Err(VsgError::ExecFailed("mkvextract".into()));
         }
-        let out = cmd.output().map_err(|e| VsgError::Process(format!("spawn mkvextract: {}", e)))?;
-        if !out.status.success() {
-            return Err(VsgError::Process(format!("mkvextract failed ({}): {}", out.status, String::from_utf8_lossy(&out.stderr))));
-        }
-        Ok(())
-    };
-
-    // REF
-    if !selection.ref_tracks.is_empty() {
-        let input = &selection.ref_tracks[0].file_path;
-        let mut maps:Vec<(u32,String)> = Vec::new();
-        for (i, t) in selection.ref_tracks.iter().enumerate() {
-            let subdir = match t.r#type.as_str() { "video"=>"v", "audio"=>"a", "subtitles"=>"s", _=>"o" };
-            let mut p = ref_dir.clone(); p.push(subdir);
-            ensure_dir(&p)?;
-            let fname = format!("{:03}_{}_{}.bin", i, t.r#type, t.language.clone().unwrap_or_else(||"und".into()));
-            p.push(fname);
-            maps.push((t.track_id, p.to_string_lossy().to_string()));
-            out_files.push(p.to_string_lossy().to_string());
-        }
-        run_for(input, &maps)?;
+        println!("EXTRACTED {}", out_file.display());
     }
 
-    // SEC
-    if !selection.sec_tracks.is_empty() {
-        let input = &selection.sec_tracks[0].file_path;
-        let mut maps:Vec<(u32,String)> = Vec::new();
-        for (i, t) in selection.sec_tracks.iter().enumerate() {
-            let mut p = sec_dir.clone(); p.push("a");
-            ensure_dir(&p)?;
-            let fname = format!("{:03}_{}_{}.bin", i, t.r#type, t.language.clone().unwrap_or_else(||"und".into()));
-            p.push(fname);
-            maps.push((t.track_id, p.to_string_lossy().to_string()));
-            out_files.push(p.to_string_lossy().to_string());
-        }
-        run_for(input, &maps)?;
-    }
-
-    // TER
-    if !selection.ter_tracks.is_empty() {
-        let input = &selection.ter_tracks[0].file_path;
-        let mut maps:Vec<(u32,String)> = Vec::new();
-        for (i, t) in selection.ter_tracks.iter().enumerate() {
-            let mut p = ter_dir.clone(); let subdir = if t.r#type=="subtitles"{"s"} else {"o"}; p.push(subdir);
-            ensure_dir(&p)?;
-            let fname = format!("{:03}_{}_{}.bin", i, t.r#type, t.language.clone().unwrap_or_else(||"und".into()));
-            p.push(fname);
-            maps.push((t.track_id, p.to_string_lossy().to_string()));
-            out_files.push(p.to_string_lossy().to_string());
-        }
-        run_for(input, &maps)?;
-    }
-
-    Ok(ExtractSummary{files: out_files})
+    Ok(())
 }
