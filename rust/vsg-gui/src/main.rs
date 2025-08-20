@@ -10,13 +10,13 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
-// Raw handle traits (winit 0.29)
-use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+// Winit 0.29 raw handle traits (0.5)
+use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
 
 use glutin::prelude::*;
 use glutin_winit::DisplayBuilder;
 use glutin::config::ConfigTemplateBuilder;
-use glutin::context::{ContextAttributesBuilder, NotCurrentGlContextSurfaceAccessor};
+use glutin::context::ContextAttributesBuilder;
 use glutin::display::{Display, DisplayApiPreference};
 use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
 
@@ -160,7 +160,7 @@ fn first_audio_under(dir:&Path) -> Option<String> {
 }
 
 fn main() -> Result<()> {
-    // --- glutin + winit 0.29 setup ---
+    // --- glutin + winit 0.29 setup (glutin 0.30, raw-window-handle 0.5) ---
     let event_loop = EventLoop::new()?;
 
     let template = ConfigTemplateBuilder::new().with_alpha_size(8).with_transparency(false);
@@ -170,25 +170,26 @@ fn main() -> Result<()> {
             .with_inner_size(LogicalSize::new(1100.0, 700.0))
     ));
 
-    let (window, gl_config) = display_builder
+    let (window_opt, gl_config) = display_builder
         .build(&event_loop, template, |mut configs| configs.next().expect("no GL configs"))
         .map_err(|e| anyhow!("glutin-winit build: {e}"))?;
-    let window = window.expect("winit window");
+    let window = window_opt.expect("winit window");
 
-    // Raw handles for glutin 0.31
+    // Raw handles from winit 0.29
     let raw_display = unsafe {
         Display::new(
-            window.display_handle()?.as_raw(),
-            DisplayApiPreference::EglThenGlx(Some(window.window_handle()?.as_raw()))
+            window.raw_display_handle(),
+            // Prefer EGL on Linux; avoids Xlib hook wiring
+            DisplayApiPreference::Egl
         )?
     };
 
     use std::num::NonZeroU32;
-    let context_attributes = ContextAttributesBuilder::new().build(Some(window.window_handle()?.as_raw()));
+    let context_attributes = ContextAttributesBuilder::new().build(Some(window.raw_window_handle()));
     let not_current = unsafe { raw_display.create_context(&gl_config, &context_attributes) }
         .map_err(|e| anyhow!("create_context: {e}"))?;
     let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-        window.window_handle()?.as_raw(),
+        window.raw_window_handle(),
         NonZeroU32::new(1100).unwrap(),
         NonZeroU32::new(700).unwrap(),
     );
@@ -278,7 +279,7 @@ fn main() -> Result<()> {
                             busy = true;
                             log_lines.push("Starting analysis...".into());
                             let s = settings.clone();
-                            // Spawn worker
+                            // Worker thread
                             std::thread::spawn(move || {
                                 let run = || -> Result<String> {
                                     // Resolve dirs
