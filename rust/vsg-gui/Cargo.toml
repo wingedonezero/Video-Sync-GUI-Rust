@@ -10,8 +10,8 @@ imgui = "0.12"
 imgui-winit-support = "0.12"
 imgui-glow-renderer = "0.12"
 
-# Pin to winit 0.28 to match imgui-winit-support 0.12 APIs (Linux backends enabled)
-winit = { version = "0.28", features = ["x11", "wayland"] }
+# Use winit 0.29 (matches imgui-winit-support 0.12) and enable Linux backends
+winit = { version = "0.29", features = ["x11", "wayland"] }
 
 glow = "0.13"
 raw-window-handle = "0.6"
