@@ -7,9 +7,9 @@ edition = "2021"
 vsg-core = { path = "../vsg-core" }
 
 imgui = "0.12"
-imgui-winit-support = { version = "0.12", default-features = false, features = ["winit-29"] }
+imgui-winit-support = "0.13"
+winit = { version = "0.30", features = ["x11", "wayland"] }
 glow = "0.13"
-winit = { version = "0.29", features = ["x11", "wayland"] }
 raw-window-handle = "0.6"
 
 anyhow = "1"
