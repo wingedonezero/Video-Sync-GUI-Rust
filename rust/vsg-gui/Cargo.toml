@@ -5,26 +5,23 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
-log = "0.4"
-env_logger = "0.11"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-which = "6"
-
-# ==== GUI stack pinned for stability ====
 imgui = "0.12.0"
 imgui-winit-support = "0.12.0"
 imgui-glow-renderer = "0.12.0"
 glow = "0.13.1"
 
-winit = "0.29.15"
+# Pin the windowing stack to a mutually compatible set (winit 0.29 + rwh 0.5 + glutin 0.30)
+winit = { version = "0.29.15", default-features = false, features = ["x11", "wayland"] }
 raw-window-handle = "0.5.2"
-
-glutin = { version = "0.31.3", default-features = false, features = ["egl", "glx"] }
+glutin = "0.30.10"
 glutin-winit = "0.4.2"
+log = "0.4"
 
-# Core crate from your workspace
-vsg-core = { path = "../vsg-core" }
+[profile.release]
+opt-level = 3
 
-[features]
-default = []
+[package.metadata.vsg-notes]
+# This crate is intentionally isolated to avoid pulling newer, incompatible transitive versions.
+# If cargo tries to upgrade winit to 0.30 or glutin to 0.31+, use:
+#   cargo update -p winit --precise 0.29.15
+#   cargo update -p glutin --precise 0.30.10
