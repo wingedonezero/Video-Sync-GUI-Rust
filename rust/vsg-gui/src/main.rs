@@ -10,6 +10,9 @@ use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
 use winit::window::WindowBuilder;
 
+// Bring handle traits into scope for display/window handles
+use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+
 use glutin::prelude::*;
 use glutin_winit::DisplayBuilder;
 use glutin::config::ConfigTemplateBuilder;
@@ -167,23 +170,29 @@ fn main() -> Result<()> {
             .with_inner_size(LogicalSize::new(1100.0, 700.0))
     ));
 
-    let (window, gl_config) = display_builder.build(&event_loop, template, |configs| {
-        configs.reduce(|acc, cfg| if cfg.num_samples() < acc.num_samples() { cfg } else { acc }).unwrap()
-    })?;
+    // Avoid version/trait mismatches: select the first config
+    let (window, gl_config) = display_builder
+        .build(&event_loop, template, |mut configs| configs.next().expect("no GL configs"))
+        .map_err(|e| anyhow!("glutin-winit build: {e}"))?;
 
     let window = window.expect("winit window");
-    let raw_display = Display::new(window.raw_display_handle(), window.raw_window_handle())?;
+
+    // Use window.display_handle()/window.window_handle() with trait imports above
+    let raw_display = Display::new(window.display_handle(), window.window_handle())
+        .map_err(|e| anyhow!("glutin Display::new: {e}"))?;
 
     use std::num::NonZeroU32;
-    let context_attributes = ContextAttributesBuilder::new().build(Some(window.raw_window_handle()));
-    let not_current = unsafe { raw_display.create_context(&gl_config, &context_attributes)? };
+    let context_attributes = ContextAttributesBuilder::new().build(Some(window.window_handle()));
+    let not_current = unsafe { raw_display.create_context(&gl_config, &context_attributes) }
+        .map_err(|e| anyhow!("create_context: {e}"))?;
     let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-        window.raw_window_handle(),
+        window.window_handle(),
         NonZeroU32::new(1100).unwrap(),
         NonZeroU32::new(700).unwrap(),
     );
-    let surface = unsafe { raw_display.create_window_surface(&gl_config, &attrs)? };
-    let context = not_current.make_current(&surface)?;
+    let surface = unsafe { raw_display.create_window_surface(&gl_config, &attrs) }
+        .map_err(|e| anyhow!("create_window_surface: {e}"))?;
+    let context = not_current.make_current(&surface).map_err(|e| anyhow!("make_current: {e}"))?;
 
     // glow + imgui
     let gl = unsafe {

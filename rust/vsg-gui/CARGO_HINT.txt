@@ -1,0 +1,4 @@
+Suggested Cargo.toml pins for consistency (if version skew persists):
+[dependencies]
+glutin = "=0.31.3"
+glutin-winit = "=0.4.2"
