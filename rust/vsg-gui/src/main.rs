@@ -1,420 +1,321 @@
-use anyhow::{anyhow, Context, Result};
-use imgui::*;
-use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use serde_json::json;
-use std::fs;
-use std::path::{Path, PathBuf};
+//! Minimal imgui + winit 0.29 + glutin 0.30 bootstrap GUI wired to vsg-core.
+//! This uses the older, stable APIs to avoid the mixed crate versions you hit.
+//! It opens a window, shows three file pickers (REF/SEC/TER), analysis options, and a Run button.
+//! For now, it shells out to the same extraction/analysis helpers in vsg-core that the CLI uses.
+
 use std::time::Instant;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Result, Context};
+use imgui::*;
+use imgui_glow_renderer::AutoRenderer;
+use imgui_winit_support::{HiDpiMode, WinitPlatform};
+use raw_window_handle::HasRawWindowHandle;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
-use winit::window::Window;
 use winit::window::WindowBuilder;
 
-// Winit 0.30 raw handle traits (0.6)
-use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-
 use glutin::prelude::*;
-use glutin_winit::DisplayBuilder;
 use glutin::config::ConfigTemplateBuilder;
-use glutin::context::ContextAttributesBuilder;
 use glutin::display::{Display, DisplayApiPreference};
-use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
+use glutin::context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentContext};
+use glutin::surface::{Surface, SurfaceAttributesBuilder, WindowSurface};
+use glutin_winit::DisplayBuilder;
 
-use vsg_core::analyze::audio_xcorr::{analyze_audio_xcorr_detailed, Band, Method, StereoMode, XCorrParams};
-use vsg_core::extract::run::run_mkvextract;
+use vsg_core::analyze::audio_xcorr::{analyze_pair, XCorrParams, Band};
+use vsg_core::extract::run::{run_mkvextract};
+use vsg_core::fsutil::{ensure_dir, default_work_dir, default_output_dir};
 use vsg_core::model::{SelectionEntry, SelectionManifest, Source};
 
-mod config;
-use config::{ExtractionStrategy, Settings};
-
-fn exe_dir() -> PathBuf {
-    std::env::current_exe().ok().and_then(|p| p.parent().map(|p| p.to_path_buf())).unwrap_or_else(|| std::env::current_dir().unwrap())
-}
-
-fn ensure_dir(p: &Path) -> Result<()> {
-    fs::create_dir_all(p).with_context(|| format!("create dir {}", p.display()))
-}
-
-fn probe_tracks_with_mkvmerge(input: &str) -> Result<Vec<(u32, String, String)>> {
-    let out = std::process::Command::new("mkvmerge").arg("-J").arg(input).output().context("spawn mkvmerge -J")?;
-    if !out.status.success() {
-        return Err(anyhow!("mkvmerge -J failed: {}", String::from_utf8_lossy(&out.stderr)));
-    }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout)?;
-    let mut res = vec![];
-    if let Some(arr) = v.get("tracks").and_then(|t| t.as_array()) {
-        for t in arr {
-            if t.get("type").and_then(|x| x.as_str()) == Some("audio") {
-                let id = t.get("id").and_then(|x| x.as_u64()).unwrap_or(0) as u32;
-                let codec = t.get("codec_id").and_then(|x| x.as_str())
-                    .or_else(|| t.get("codec").and_then(|x| x.as_str()))
-                    .unwrap_or("unknown").to_lowercase();
-                let lang = t.get("properties")
-                    .and_then(|p| p.get("language").or_else(|| p.get("language_ietf")))
-                    .and_then(|x| x.as_str())
-                    .unwrap_or("und").to_lowercase();
-                res.push((id, codec, lang));
-            }
-        }
-    }
-    Ok(res)
-}
-
-fn build_manifest(ref_file:&str, sec_file:Option<&str>, ter_file:Option<&str>) -> Result<SelectionManifest> {
-    let ref_tracks = probe_tracks_with_mkvmerge(ref_file)?;
-    let mut ref_first_lang = "und".to_string();
-    let mut ref_entries: Vec<SelectionEntry> = vec![];
-    for (i,(id, codec, lang)) in ref_tracks.iter().enumerate() {
-        if i == 0 { ref_first_lang = lang.clone(); }
-        ref_entries.push(SelectionEntry{
-            file_path: ref_file.into(),
-            track_id: *id,
-            r#type: "audio".into(),
-            language: Some(lang.clone()),
-            codec: Some(codec.clone()),
-            container_index: Some(0),
-            name: None,
-            source: Source::REF,
-        });
-    }
-    let target_lang = ref_first_lang;
-
-    let pick_side = |file_opt:Option<&str>, source:Source| -> Result<Vec<SelectionEntry>> {
-        if let Some(file) = file_opt {
-            let tracks = probe_tracks_with_mkvmerge(file)?;
-            let mut first: Option<(u32,String,String)> = None;
-            let mut best: Option<(u32,String,String)> = None;
-            for (id, codec, lang) in tracks {
-                if first.is_none() { first = Some((id, codec.clone(), lang.clone())); }
-                if lang == target_lang { best = Some((id, codec.clone(), lang.clone())); break; }
-            }
-            let (id, codec, lang) = best.or(first).ok_or_else(|| anyhow!("no audio tracks in {}", file))?;
-            Ok(vec![ SelectionEntry{
-                file_path: file.into(),
-                track_id:id,
-                r#type:"audio".into(),
-                language: Some(lang),
-                codec: Some(codec),
-                container_index: Some(0),
-                name: None,
-                source,
-            } ])
-        } else {
-            Ok(vec![])
-        }
-    };
-
-    let sec_entries = pick_side(sec_file, Source::SEC)?;
-    let ter_entries = pick_side(ter_file, Source::TER)?;
-
-    Ok(SelectionManifest{ ref_tracks: ref_entries, sec_tracks: sec_entries, ter_tracks: ter_entries })
-}
-
-fn extract_if_needed(sel:&SelectionManifest, work:&PathBuf, strategy:ExtractionStrategy) -> Result<()> {
-    let have_any = work.join("ref").exists() || work.join("sec").exists() || work.join("ter").exists();
-    match strategy {
-        ExtractionStrategy::DecodeDirect => Ok(()),
-        ExtractionStrategy::ReuseOnly => {
-            if have_any { Ok(()) } else { Err(anyhow!("No extracted audio present under {}", work.display())) }
-        }
-        ExtractionStrategy::Auto => {
-            if have_any { Ok(()) } else { run_mkvextract(sel, work).context("mkvextract").map(|_| ()) }
-        }
-        ExtractionStrategy::ForceExtract => run_mkvextract(sel, work).context("mkvextract").map(|_| ()),
-    }
-}
-
-fn do_analyze(ref_audio:&str, other_audio:&str, duration_s:f64, params:&XCorrParams) -> Result<(i128, i64, Vec<serde_json::Value>)> {
-    let (res, chunks) = analyze_audio_xcorr_detailed(ref_audio, other_audio, duration_s, params)?;
-    let chunks_json: Vec<_> = chunks.into_iter().map(|c| json!({
-        "center_s": c.center_s, "window_samples": c.window_samples,
-        "lag_ns": c.lag_ns, "lag_ms": c.lag_ms, "peak": c.peak
-    })).collect();
-    Ok((res.delay_ns, res.delay_ms, chunks_json))
-}
-
+// --- Small helpers mirrored from CLI ---
 fn first_audio_under(dir:&Path) -> Option<String> {
-    if let Ok(rd) = fs::read_dir(dir) {
-        for e in rd.flatten() {
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.contains("_audio.") {
-                return Some(e.path().to_string_lossy().to_string());
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                if let Some(ext) = p.extension().and_then(|s| s.to_str()) {
+                    if ["aac","ac3","eac3","dts","truehd","flac","opus","vorbis","m4a","mp3","wav","bin"].contains(&ext) {
+                        return Some(p.to_string_lossy().into_owned());
+                    }
+                }
             }
         }
     }
     None
 }
 
-fn create_window(event_loop: &EventLoop<()>) -> Result<(Window, glutin::config::Config, Display, glutin::display::Display)> {
-    let template = ConfigTemplateBuilder::new().with_alpha_size(8).with_transparency(false);
-    let display_builder = DisplayBuilder::new().with_window_builder(Some(
-        WindowBuilder::new()
-            .with_title("VSG GUI - Analyze")
-            .with_inner_size(LogicalSize::new(1100.0, 700.0))
-    ));
+fn pick_side(file_opt:Option<&str>, source:Source) -> Result<Vec<SelectionEntry>> {
+    let mut out = Vec::new();
+    if let Some(file) = file_opt {
+        // simple default: pick audio track 0
+        out.push(SelectionEntry {
+            file_path: file.into(),
+            track_id: 0,
+            r#type: "audio".into(),
+            language: None,
+            codec: None,
+            // new fields
+            container_index: Some(0),
+            name: None,
+            source,
+        });
+    }
+    Ok(out)
+}
 
-    let (window_opt, gl_config) = display_builder
-        .build(event_loop, template, |mut configs| configs.next().expect("no GL configs"))
-        .map_err(|e| anyhow!("glutin-winit build: {e}"))?;
-    let window = window_opt.expect("winit window");
+fn build_manifest(ref_path:&str, sec_path:Option<&str>, ter_path:Option<&str>) -> Result<SelectionManifest> {
+    Ok(SelectionManifest {
+        ref_entries: pick_side(Some(ref_path), Source::REF)?,
+        sec_entries: pick_side(sec_path, Source::SEC)?,
+        ter_entries: pick_side(ter_path, Source::TER)?,
+    })
+}
 
-    // Raw handles from winit 0.30 (0.6)
-    let display = unsafe {
-        Display::new(
-            window.display_handle().map_err(|e| anyhow!("display_handle: {e}"))?.as_raw(),
-            // Prefer EGL on Linux to simplify
-            DisplayApiPreference::Egl
-        )?
-    };
+fn extract_if_needed(sel:&SelectionManifest, work:&Path) -> Result<()> {
+    ensure_dir(work)?;
+    let have_any = first_audio_under(&work.join("ref")).is_some()
+        && (sel.sec_entries.is_empty() || first_audio_under(&work.join("sec")).is_some())
+        && (sel.ter_entries.is_empty() || first_audio_under(&work.join("ter")).is_some());
+    if have_any {
+        Ok(())
+    } else {
+        run_mkvextract(sel, &work.to_path_buf()).context("mkvextract")?;
+        Ok(())
+    }
+}
 
-    Ok((window, gl_config, display, display.clone()))
+fn do_analyze(ref_audio:&str, other_audio:&str, ns_err:i64, params:&XCorrParams) -> Result<(i64, f64)> {
+    let (nanosec, mse, _chunks) = analyze_pair(ref_audio, other_audio, ns_err, params)?;
+    Ok((nanosec, mse))
+}
+
+// --- GUI state ---
+#[derive(Default)]
+struct UiState {
+    ref_path: String,
+    sec_path: String,
+    ter_path: String,
+    work_dir: String,
+    out_dir: String,
+    chunks: u32,
+    chunk_dur_s: f32,
+    sample_rate_sel: usize, // 0:12k,1:24k,2:48k
+    band_sel: usize,        // 0:voice 1:full
+    err_min_ns: i64,
+    err_max_ns: i64,
+    log: String,
+    run_requested: bool,
+}
+
+fn current_sample_rate(idx:usize) -> u32 {
+    match idx {
+        0 => 12000, 1 => 24000, _ => 48000
+    }
+}
+
+fn current_band(idx:usize) -> Band {
+    if idx == 0 { Band::Voice } else { Band::Full }
+}
+
+fn push_log(log:&mut String, line:&str) {
+    use std::fmt::Write;
+    let _ = writeln!(log, "{}", line);
 }
 
 fn main() -> Result<()> {
-    // --- glutin + winit 0.30 setup (raw-window-handle 0.6) ---
-    let event_loop = EventLoop::new()?;
+    // ---- Window & GL (winit 0.29 + glutin 0.30 path) ----
+    let event_loop = EventLoop::new();
+    let window_builder = WindowBuilder::new()
+        .with_title("Video Sync GUI (prototype)")
+        .with_inner_size(LogicalSize::new(1100.0, 720.0));
 
-    let (window, gl_config, raw_display, _display_copy) = create_window(&event_loop)?;
+    let template = ConfigTemplateBuilder::new();
+    let display_builder = DisplayBuilder::new().with_window_builder(Some(window_builder));
 
-    use std::num::NonZeroU32;
-    let context_attributes = ContextAttributesBuilder::new().build(Some(window.window_handle()?.as_raw()));
-    let not_current = unsafe { raw_display.create_context(&gl_config, &context_attributes) }
-        .map_err(|e| anyhow!("create_context: {e}"))?;
-    let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-        window.window_handle()?.as_raw(),
-        NonZeroU32::new(1100).unwrap(),
-        NonZeroU32::new(700).unwrap(),
-    );
-    let surface = unsafe { raw_display.create_window_surface(&gl_config, &attrs) }
-        .map_err(|e| anyhow!("create_window_surface: {e}"))?;
-    let context = not_current.make_current(&surface).map_err(|e| anyhow!("make_current: {e}"))?;
+    let (window, config) = display_builder
+        .build(&event_loop, template, |mut configs| configs.next().expect("no GL configs"))
+        .context("create window + choose GL config")?;
+    let window = window.expect("failed to create winit window");
 
-    // glow + imgui
-    let gl = unsafe {
-        glow::Context::from_loader_function(|s| raw_display.get_proc_address(&std::ffi::CString::new(s).unwrap()) as *const _)
+    let raw_display = unsafe {
+        Display::new(
+            window.raw_display_handle(),
+            DisplayApiPreference::EglThenGlx(Box::new(|_cb| {})), // X11: allow GLX fallback
+        ).context("create glutin Display")?
     };
 
+    let context_attributes = ContextAttributesBuilder::new()
+        .with_context_api(ContextApi::OpenGl(Some(glutin::context::Version::new(3, 3))))
+        .build(Some(window.raw_window_handle()));
+
+    let not_current = unsafe {
+        raw_display.create_context(&config, &context_attributes)
+    }.context("create GL context")?;
+
+    let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
+        window.raw_window_handle(),
+        config.compatible_surface_transform(),
+        None,
+    );
+
+    let surface = unsafe { raw_display.create_window_surface(&config, &attrs) }
+        .context("create window surface")?;
+
+    let context: PossiblyCurrentContext = not_current.make_current(&surface)
+        .context("make GL context current")?;
+
+    let gl = unsafe { glow::Context::from_loader_function(|s| raw_display.get_proc_address(s) as *const _) };
+
+    // ---- ImGui wiring ----
     let mut imgui = imgui::Context::create();
+    let mut platform = WinitPlatform::with_hidpi_mode(&mut imgui, HiDpiMode::Default);
+    platform.attach_window(imgui.io_mut(), &window, imgui_winit_support::HiDpiMode::Default);
+
     imgui.set_ini_filename(None);
-    let mut platform = WinitPlatform::init(&mut imgui);
-    platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
-    let mut renderer = imgui_glow_renderer::AutoRenderer::initialize(gl, &mut imgui)
-        .map_err(|e| anyhow!("renderer init: {:?}", e))?;
+    let mut renderer = AutoRenderer::initialize(&mut imgui, &gl).context("imgui renderer")?;
 
-    // settings
-    let settings_path = exe_dir().join("vsg_settings.json");
-    let mut settings: Settings = fs::read_to_string(&settings_path).ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_default();
-
-    let mut log_lines: Vec<String> = Vec::new();
-    let mut busy = false;
+    // ---- App state ----
+    let mut state = UiState {
+        work_dir: default_work_dir().to_string_lossy().into_owned(),
+        out_dir: default_output_dir().to_string_lossy().into_owned(),
+        chunks: 10,
+        chunk_dur_s: 6.0,
+        sample_rate_sel: 2,
+        band_sel: 0,
+        err_min_ns: -1_000_000_000,
+        err_max_ns:  1_000_000_000,
+        ..Default::default()
+    };
 
     let mut last_frame = Instant::now();
-    event_loop.run_app(move |event, elwt| {
-        platform.handle_event(imgui.io_mut(), &window, &event);
+
+    event_loop.run(move |event, _, control_flow| {
         match event {
-            Event::AboutToWait => {
-                window.request_redraw();
-            }
-            Event::WindowEvent { event: WindowEvent::RedrawRequested, .. } => {
-                let io = imgui.io_mut();
-                let delta = last_frame.elapsed();
-                io.update_delta_time(delta);
-                last_frame = Instant::now();
-                platform.prepare_frame(io, &window).unwrap();
-
-                let ui = imgui.frame();
-
-                ui.window("Analysis")
-                    .size([1060.0, 300.0], Condition::FirstUseEver)
-                    .build(|| {
-                        ui.input_text("REF", &mut settings.ref_path).build();
-                        ui.input_text("SEC", &mut settings.sec_path).build();
-                        ui.input_text("TER", &mut settings.ter_path).build();
-                        ui.separator();
-                        ui.input_text("Work dir (blank = exe/tmp_work)", &mut settings.work_dir).build();
-                        ui.input_text("Out dir (blank = exe/out)", &mut settings.out_dir).build();
-                        ui.separator();
-
-                        ui.text("Options:");
-                        ui.input_scalar("Chunks", &mut settings.chunks).build();
-                        ui.input_scalar("Chunk dur (s)", &mut settings.chunk_dur_s).build();
-                        ui.input_text("Sample rate (s12000/s24000/s48000)", &mut settings.sample_rate).build();
-                        ui.input_text("Stereo (mono/left/right/mid/best)", &mut settings.stereo_mode).build();
-                        ui.input_text("Method (fft/compat)", &mut settings.method).build();
-                        ui.input_text("Band (none/voice)", &mut settings.band).build();
-
-                        ui.separator();
-                        let mut strategy_idx = match settings.strategy {
-                            ExtractionStrategy::Auto => 0,
-                            ExtractionStrategy::ForceExtract => 1,
-                            ExtractionStrategy::ReuseOnly => 2,
-                            ExtractionStrategy::DecodeDirect => 3,
-                        };
-                        let items = ["Auto", "ForceExtract", "ReuseOnly", "DecodeDirect"];
-                        if ui.combo_simple_string("Extraction Strategy", &mut strategy_idx, &items) {
-                            settings.strategy = match strategy_idx {
-                                1 => ExtractionStrategy::ForceExtract,
-                                2 => ExtractionStrategy::ReuseOnly,
-                                3 => ExtractionStrategy::DecodeDirect,
-                                _ => ExtractionStrategy::Auto,
-                            };
-                        }
-
-                        if ui.button("Save Settings") {
-                            let _ = fs::write(&settings_path, serde_json::to_string_pretty(&settings).unwrap());
-                            log_lines.push("Settings saved.".into());
-                        }
-                        ui.same_line();
-                        if ui.button("Analyze") && !busy {
-                            busy = true;
-                            log_lines.push("Starting analysis...".into());
-                            let s = settings.clone();
-                            // Worker thread
-                            std::thread::spawn(move || {
-                                let run = || -> Result<String> {
-                                    // Resolve dirs
-                                    let exe = exe_dir();
-                                    let work: PathBuf = if s.work_dir.trim().is_empty() { exe.join("tmp_work") } else { PathBuf::from(&s.work_dir) };
-                                    let out: PathBuf = if s.out_dir.trim().is_empty() { exe.join("out") } else { PathBuf::from(&s.out_dir) };
-                                    ensure_dir(&work)?; ensure_dir(&out)?;
-                                    let manifest_dir = work.join("manifest");
-                                    ensure_dir(&manifest_dir)?;
-
-                                    // Build or load manifest
-                                    let sel_path = manifest_dir.join("selection.json");
-                                    let sel = if sel_path.exists() {
-                                        let t = fs::read_to_string(&sel_path)?;
-                                        serde_json::from_str::<SelectionManifest>(&t)?
-                                    } else {
-                                        let sel = super::build_manifest(&s.ref_path, (!s.sec_path.is_empty()).then(|| s.sec_path.as_str()), (!s.ter_path.is_empty()).then(|| s.ter_path.as_str()))?;
-                                        fs::write(&sel_path, serde_json::to_string_pretty(&sel)?)?;
-                                        sel
-                                    };
-
-                                    // Extract per strategy
-                                    super::extract_if_needed(&sel, &work, s.strategy)?;
-
-                                    // Resolve audio files for analysis
-                                    let ref_audio = super::first_audio_under(&work.join("ref"))
-                                        .or_else(|| (!s.ref_path.is_empty()).then(|| s.ref_path.clone()))
-                                        .ok_or_else(|| anyhow!("no REF audio"))?;
-                                    let mut results = serde_json::json!({
-                                        "meta":{
-                                            "ref_audio_path": ref_audio,
-                                            "sec_audio_path": super::first_audio_under(&work.join("sec")),
-                                            "ter_audio_path": super::first_audio_under(&work.join("ter"))
-                                        },
-                                        "params":{
-                                            "chunks": s.chunks, "chunk_dur_s": s.chunk_dur_s, "sample_rate": &s.sample_rate,
-                                            "stereo_mode": &s.stereo_mode, "method": &s.method, "band": &s.band
-                                        },
-                                        "runs":{}, "final":{}
-                                    });
-
-                                    let sr = match s.sample_rate.as_str() {
-                                        "s12000" => 12_000u32,
-                                        "s48000" => 48_000u32,
-                                        _ => 24_000u32,
-                                    };
-                                    let stereo = match s.stereo_mode.as_str() {
-                                        "mono" => StereoMode::Mono, "left" => StereoMode::Left, "right" => StereoMode::Right,
-                                        "mid" => StereoMode::Mid, _ => StereoMode::Best
-                                    };
-                                    let method = match s.method.as_str() {
-                                        "compat" => Method::Compat, _ => Method::Fft
-                                    };
-                                    let band = match s.band.as_str() {
-                                        "voice" => Band::Voice, _ => Band::None
-                                    };
-                                    let params = XCorrParams{
-                                        chunks: s.chunks, chunk_dur_s: s.chunk_dur_s, sample_rate: sr,
-                                        min_match: 0.8, stereo_mode: stereo, method, band
-                                    };
-
-                                    // Duration via ffprobe
-                                    let dur = {
-                                        let out = std::process::Command::new("ffprobe")
-                                            .args(["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1"])
-                                            .arg(&s.ref_path)
-                                            .output()
-                                            .context("ffprobe")?;
-                                        let txt = String::from_utf8_lossy(&out.stdout);
-                                        txt.trim().parse::<f64>().unwrap_or(600.0)
-                                    };
-
-                                    // SEC
-                                    if let Some(sec_audio) = results["meta"]["sec_audio_path"].as_str().map(|s| s.to_string()) {
-                                        let (ns, ms, chunks) = super::do_analyze(results["meta"]["ref_audio_path"].as_str().unwrap(), &sec_audio, dur, &params)?;
-                                        let summary = json!({
-                                            "median_delay_ns": ns, "median_delay_ms": ms,
-                                            "peak_max": chunks.iter().map(|c| c["peak"].as_f64().unwrap_or(0.0)).fold(0.0, f64::max)
-                                        });
-                                        results["runs"]["sec"] = json!({"language": null, "language_matched": null, "chunks": chunks, "summary": summary});
-                                    }
-                                    // TER
-                                    if let Some(ter_audio) = results["meta"]["ter_audio_path"].as_str().map(|s| s.to_string()) {
-                                        let (ns, ms, chunks) = super::do_analyze(results["meta"]["ref_audio_path"].as_str().unwrap(), &ter_audio, dur, &params)?;
-                                        let summary = json!({
-                                            "median_delay_ns": ns, "median_delay_ms": ms,
-                                            "peak_max": chunks.iter().map(|c| c["peak"].as_f64().unwrap_or(0.0)).fold(0.0, f64::max)
-                                        });
-                                        results["runs"]["ter"] = json!({"language": null, "language_matched": null, "chunks": chunks, "summary": summary});
-                                    }
-
-                                    // Final
-                                    let mut delays = vec![];
-                                    if let Some(ms) = results["runs"]["sec"]["summary"]["median_delay_ms"].as_i64() { delays.push(ms); }
-                                    if let Some(ms) = results["runs"]["ter"]["summary"]["median_delay_ms"].as_i64() { delays.push(ms); }
-                                    let min_ms = delays.iter().cloned().min().unwrap_or(0);
-                                    let mut pos = serde_json::Map::new();
-                                    if let Some(ms) = results["runs"]["sec"]["summary"]["median_delay_ms"].as_i64() { pos.insert("sec".into(), serde_json::Value::from(ms - min_ms)); }
-                                    if let Some(ms) = results["runs"]["ter"]["summary"]["median_delay_ms"].as_i64() { pos.insert("ter".into(), serde_json::Value::from(ms - min_ms)); }
-                                    results["final"] = json!({
-                                        "delays_ms_signed": {
-                                            "sec": results["runs"]["sec"]["summary"]["median_delay_ms"],
-                                            "ter": results["runs"]["ter"]["summary"]["median_delay_ms"],
-                                        },
-                                        "global_shift_ms": -min_ms,
-                                        "delays_ms_positive": serde_json::Value::Object(pos),
-                                    });
-
-                                    // Write analysis.json
-                                    let out_path = exe_dir().join("out").join("analysis.json");
-                                    fs::create_dir_all(out_path.parent().unwrap()).ok();
-                                    fs::write(&out_path, serde_json::to_string_pretty(&results)?)?;
-                                    Ok(format!("Analysis done → {}", out_path.display()))
-                                };
-                                let msg = match run() {
-                                    Ok(ok) => ok,
-                                    Err(e) => format!("ERROR: {e:?}"),
-                                };
-                                eprintln!("{msg}");
-                            });
-                        }
-                    });
-
-                ui.window("Log")
-                    .size([1060.0, 320.0], Condition::FirstUseEver)
-                    .build(|| {
-                        for line in &log_lines { ui.text_wrapped(line); }
-                    });
-
-                platform.prepare_render(&ui, &window);
-                renderer.render(imgui.render()).unwrap();
-
-                // Swap buffers
-                surface.swap_buffers(&context).ok();
+            Event::NewEvents(_) => {
+                let now = Instant::now();
+                imgui.io_mut().update_delta_time(now - last_frame);
+                last_frame = now;
             }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                let _ = std::fs::write(exe_dir().join("vsg_settings.json"), serde_json::to_string_pretty(&settings).unwrap());
-                elwt.exit();
+                *control_flow = winit::event_loop::ControlFlow::Exit;
+            }
+            Event::WindowEvent { event: WindowEvent::Resized(size), .. } => {
+                surface.resize(
+                    &context,
+                    size.width.try_into().unwrap_or(1),
+                    size.height.try_into().unwrap_or(1),
+                );
+            }
+            Event::AboutToWait => {
+                platform.prepare_frame(imgui.io_mut(), &window).unwrap();
+                let ui = imgui.frame();
+
+                ui.window("Inputs & Options")
+                    .size([520.0, 360.0], Condition::FirstUseEver)
+                    .build(|| {
+                        ui.input_text("REF mkv", &mut state.ref_path).build();
+                        ui.input_text("SEC mkv", &mut state.sec_path).build();
+                        ui.input_text("TER mkv", &mut state.ter_path).build();
+                        ui.separator();
+                        ui.input_text("Work dir", &mut state.work_dir).build();
+                        ui.input_text("Output dir", &mut state.out_dir).build();
+                        ui.separator();
+                        ui.text("Analysis");
+                        ui.input_scalar("Chunks", &mut state.chunks).build();
+                        ui.input_float("Chunk duration (s)", &mut state.chunk_dur_s).build();
+
+                        ComboBox::new("Sample rate").build_simple_string(
+                            &ui,
+                            &mut state.sample_rate_sel,
+                            &["12 kHz", "24 kHz", "48 kHz"],
+                        );
+                        ComboBox::new("Band").build_simple_string(
+                            &ui,
+                            &mut state.band_sel,
+                            &["Voice", "Full"],
+                        );
+                        ui.input_scalar("Err min (ns)", &mut state.err_min_ns).build();
+                        ui.input_scalar("Err max (ns)", &mut state.err_max_ns).build();
+
+                        if ui.button("Run extract + analyze") {
+                            state.run_requested = true;
+                        }
+                    });
+
+                ui.window("Live Log")
+                    .size([520.0, 300.0], Condition::FirstUseEver)
+                    .position([540.0, 20.0], Condition::FirstUseEver)
+                    .build(|| {
+                        ui.text_wrapped(&state.log);
+                    });
+
+                if state.run_requested {
+                    state.run_requested = false;
+                    // fire-and-forget on the UI thread for now (short operations); long jobs should be threaded later
+                    let mut run = || -> Result<()> {
+                        let ref_path = state.ref_path.trim();
+                        if ref_path.is_empty() { anyhow::bail!("REF path is empty"); }
+                        let work = PathBuf::from(&state.work_dir);
+                        push_log(&mut state.log, &format!("Work dir: {}", work.display()));
+
+                        let sel = build_manifest(
+                            ref_path,
+                            (!state.sec_path.trim().is_empty()).then(|| state.sec_path.trim()),
+                            (!state.ter_path.trim().is_empty()).then(|| state.ter_path.trim()),
+                        )?;
+                        push_log(&mut state.log, "Built selection manifest");
+
+                        extract_if_needed(&sel, &work)?;
+                        push_log(&mut state.log, "Extraction complete (or skipped)");
+
+                        let ref_audio = first_audio_under(&work.join("ref")).context("no REF audio extracted")?;
+                        if !state.sec_path.is_empty() {
+                            let sec_audio = first_audio_under(&work.join("sec")).context("no SEC audio extracted")?;
+                            let params = XCorrParams{
+                                chunks: state.chunks as usize,
+                                chunk_dur_s: state.chunk_dur_s as f64,
+                                sample_rate: current_sample_rate(state.sample_rate_sel),
+                                min_match: 0.12,
+                                duration_s: None,
+                                videodiff: false,
+                                band: current_band(state.band_sel),
+                            };
+                            let (ns, mse) = do_analyze(&ref_audio, &sec_audio, state.err_max_ns.abs(), &params)?;
+                            push_log(&mut state.log, &format!("SEC offset = {} ns, MSE = {:.6}", ns, mse));
+                        }
+                        if !state.ter_path.is_empty() {
+                            let ter_audio = first_audio_under(&work.join("ter")).context("no TER audio extracted")?;
+                            let params = XCorrParams{
+                                chunks: state.chunks as usize,
+                                chunk_dur_s: state.chunk_dur_s as f64,
+                                sample_rate: current_sample_rate(state.sample_rate_sel),
+                                min_match: 0.12,
+                                duration_s: None,
+                                videodiff: false,
+                                band: current_band(state.band_sel),
+                            };
+                            let (ns, mse) = do_analyze(&ref_audio, &ter_audio, state.err_max_ns.abs(), &params)?;
+                            push_log(&mut state.log, &format!("TER offset = {} ns, MSE = {:.6}", ns, mse));
+                        }
+                        Ok(())
+                    };
+                    if let Err(e) = run() {
+                        push_log(&mut state.log, &format!("ERROR: {:#}", e));
+                    }
+                }
+
+                platform.prepare_render(&ui, &window);
+                let draw_data = ui.render();
+                unsafe {
+                    use glow::HasContext as _;
+                    gl.clear_color(0.1, 0.1, 0.12, 1.0);
+                    gl.clear(glow::COLOR_BUFFER_BIT);
+                }
+                renderer.render(draw_data).unwrap();
+                surface.swap_buffers(&context).unwrap();
             }
             _ => {}
         }
-    })?;
-
-    Ok(())
+    });
 }

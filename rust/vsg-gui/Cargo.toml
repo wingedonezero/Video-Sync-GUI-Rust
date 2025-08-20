@@ -4,16 +4,21 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-anyhow = "1"
+anyhow = "1.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 imgui = "0.12"
-imgui-winit-support = "0.13"          # winit 0.30 API
 imgui-glow-renderer = "0.12"
-winit = { version = "0.30", features = ["x11","wayland"] }
-glow = "0.13"
+# Pin to winit 0.29 and enable both X11 and Wayland explicitly; use raw-window-handle 0.5 ABI.
+winit = { version = "0.29.15", default-features = false, features = ["x11", "wayland", "rwh_05"] }
+imgui-winit-support = { version = "0.12", features = ["winit-29"] }
 
-glutin = "0.31.3"
-glutin-winit = "0.5.0"                 # matches winit 0.30 + glutin 0.31
+# Use glutin 0.30 + glutin-winit 0.4 which match winit 0.29 and raw-window-handle 0.5
+glow = "0.13"
+glutin = { version = "0.30.10", default-features = false, features = ["egl", "glx"] }
+glutin-winit = "0.4.2"
+raw-window-handle = "0.5"
 
 vsg-core = { path = "../vsg-core" }
+clap = { version = "4.5", features = ["derive"] }
+thiserror = "1.0"
