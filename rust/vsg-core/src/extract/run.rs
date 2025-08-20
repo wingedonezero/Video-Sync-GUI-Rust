@@ -7,36 +7,73 @@ use std::process::Command;
 fn ensure_dir(p:&PathBuf) -> Result<(),VsgError> { fs::create_dir_all(p).map_err(|e| VsgError::Io(e)) }
 
 fn ext_for(track_type:&str, codec_opt:Option<&str>) -> &'static str {
+    let c = codec_opt.unwrap_or("");
+    let cl = c.to_lowercase();
+    // Accept both normalized names and mkvmerge codec_id strings.
     match track_type {
         "audio" => {
-            match codec_opt.unwrap_or("").to_lowercase().as_str() {
-                "aac" | "a_aac" | "mp4a" => "aac",
+            match cl.as_str() {
+                "aac" | "a_aac" | "mp4a" | "a_aac_mpeg2lc" | "a_aac_mpeg4lc" => "aac",
                 "ac3" | "a_ac3" => "ac3",
-                "eac3" | "e-ac-3" | "a_eac3" => "eac3",
-                "dts" | "a_dts" => "dts",
+                "eac3" | "e-ac-3" | "a_eac3" | "a_e-ac-3" => "eac3",
+                "dts" | "a_dts" | "a_dts_hd" | "a_dts-x" => "dts",
                 "truehd" | "a_truehd" => "thd",
                 "flac" | "a_flac" => "flac",
                 "opus" | "a_opus" => "opus",
                 "vorbis" | "a_vorbis" => "ogg",
-                "pcm" | "lpcm" | "a_pcm" => "wav",
-                _ => "audio"
+                "pcm" | "lpcm" | "a_pcm" | "a_ms/acm" => "wav",
+                // Uppercase mkvmerge IDs
+                "a_aac" | "a_ac3" | "a_eac3" | "a_dts" | "a_truehd" | "a_flac" | "a_opus" | "a_vorbis" => {
+                    // already matched by lowercase, keep for clarity
+                    "audio"
+                }
+                _ => {
+                    // Check raw mkvmerge codec_id forms
+                    if c.starts_with("A_") {
+                        if c.contains("AAC") { "aac" }
+                        else if c.contains("AC3") && !c.contains("EAC3") { "ac3" }
+                        else if c.contains("EAC3") { "eac3" }
+                        else if c.contains("DTS") { "dts" }
+                        else if c.contains("TRUEHD") { "thd" }
+                        else if c.contains("FLAC") { "flac" }
+                        else if c.contains("OPUS") { "opus" }
+                        else if c.contains("VORBIS") { "ogg" }
+                        else if c.contains("PCM") { "wav" }
+                        else { "audio" }
+                    } else { "audio" }
+                }
             }
         },
         "subtitles" | "subtitle" => {
-            match codec_opt.unwrap_or("").to_lowercase().as_str() {
+            match cl.as_str() {
                 "ass" | "s_text/ass" | "s_ass" => "ass",
                 "srt" | "subrip" | "s_text/utf8" | "s_text/utf-8" => "srt",
                 "pgs" | "hdmv_pgs_subtitle" | "s_hdmv/pgs" => "sup",
-                _ => "sub"
+                _ => {
+                    if c.starts_with("S_") {
+                        if c.contains("ASS") { "ass" }
+                        else if c.contains("UTF8") || c.contains("SUBRIP") { "srt" }
+                        else if c.contains("PGS") { "sup" }
+                        else { "sub" }
+                    } else { "sub" }
+                }
             }
         },
         "video" => {
-            match codec_opt.unwrap_or("").to_lowercase().as_str() {
+            match cl.as_str() {
                 "h264" | "avc" | "v_mpeg4/iso/avc" => "h264",
                 "h265" | "hevc" | "v_mpegh/iso/hevc" => "hevc",
                 "vc1" | "v_ms/vfw/fourcc" => "vc1",
                 "mpeg2" | "mpeg-2" | "v_mpeg2" => "m2v",
-                _ => "video"
+                _ => {
+                    if c.starts_with("V_") {
+                        if c.contains("AVC") { "h264" }
+                        else if c.contains("HEVC") { "hevc" }
+                        else if c.contains("VC1") { "vc1" }
+                        else if c.contains("MPEG2") { "m2v" }
+                        else { "video" }
+                    } else { "video" }
+                }
             }
         },
         _ => "bin"
@@ -65,7 +102,6 @@ pub fn run_mkvextract(selection:&SelectionManifest, work_root:&PathBuf) -> Resul
         Ok(())
     };
 
-    // Helper to build a filename in the form: 000_<type>.<lang>.<ext>
     let mkname = |idx:usize, track_type:&str, lang_opt:&Option<String>, codec_opt:&Option<String>| -> String {
         let lang = lang_opt.clone().unwrap_or_else(|| "und".into());
         let ext = ext_for(track_type, codec_opt.as_deref());

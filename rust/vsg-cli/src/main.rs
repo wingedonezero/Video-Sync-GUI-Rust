@@ -1,13 +1,15 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::fs;
+use std::collections::HashMap;
+use std::process::Command;
 use vsg_core::probe::load_probe;
 use vsg_core::extract::select::Defaults;
 use vsg_core::extract::run::run_mkvextract;
 use vsg_core::fsutil::{default_work_dir, default_output_dir};
 use vsg_core::analyze::audio_xcorr::{analyze_audio_xcorr, XCorrParams};
 use vsg_core::analyze::videodiff::run_videodiff;
-use vsg_core::model::SelectionManifest;
+use vsg_core::model::{SelectionManifest, SelectionEntry};
 
 #[derive(Parser, Debug)]
 #[command(name="vsg", version, about="Video-Sync-GUI-Rust CLI")]
@@ -77,9 +79,54 @@ enum Command {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct ProbeTrack { id:u32, #[serde(rename="type")] kind:String, codec_id:Option<String>, codec:Option<String>, language:Option<String> }
+#[derive(serde::Deserialize)]
+struct ProbeFile { tracks:Vec<ProbeTrack> }
+
+fn mkvmerge_probe_json(input:&str) -> ProbeFile {
+    let out = Command::new("mkvmerge").arg("-J").arg(input).output().expect("spawn mkvmerge -J");
+    if !out.status.success() {
+        panic!("mkvmerge -J failed: {}", String::from_utf8_lossy(&out.stderr));
+    }
+    let txt = String::from_utf8_lossy(&out.stdout);
+    serde_json::from_str::<ProbeFile>(&txt).expect("parse mkvmerge -J")
+}
+
+fn enrich_with_probe(sel:&mut SelectionManifest) {
+    // Build set of unique inputs
+    let mut inputs: Vec<String> = Vec::new();
+    for s in [&sel.ref_tracks, &sel.sec_tracks, &sel.ter_tracks] {
+        for e in s.iter() {
+            if !inputs.contains(&e.file_path) { inputs.push(e.file_path.clone()); }
+        }
+    }
+    // Probe each input
+    let mut map: HashMap<(String,u32), (Option<String>, Option<String>)> = HashMap::new(); // (file,id) -> (codec_id/codec, language)
+    for inp in inputs.iter() {
+        let pf = mkvmerge_probe_json(inp);
+        for t in pf.tracks {
+            map.insert((inp.clone(), t.id), (t.codec_id.or(t.codec), t.language));
+        }
+    }
+    // Enrich missing codec/language
+    for e in sel.ref_tracks.iter_mut().chain(sel.sec_tracks.iter_mut()).chain(sel.ter_tracks.iter_mut()) {
+        if e.codec.is_none() || e.language.is_none() {
+            if let Some((c,l)) = map.get(&(e.file_path.clone(), e.track_id)) {
+                if e.codec.is_none() { e.codec = c.clone(); }
+                if e.language.is_none() { e.language = l.clone(); }
+            }
+        }
+    }
+}
+
 fn extract_from_manifest(manifest_path:&PathBuf, work:&PathBuf) {
     let text = fs::read_to_string(manifest_path).expect("read manifest");
-    let sel: SelectionManifest = serde_json::from_str(&text).expect("parse manifest");
+    let mut sel: SelectionManifest = serde_json::from_str(&text).expect("parse manifest");
+
+    // Enrich selection using mkvmerge -J (fills codec/language when missing)
+    enrich_with_probe(&mut sel);
+
     let mut manifest_dir = work.clone(); manifest_dir.push("manifest");
     fs::create_dir_all(&manifest_dir).expect("manifest dir");
     let mut sel_copy = manifest_dir.clone(); sel_copy.push("selection.json");
@@ -106,10 +153,10 @@ fn main() {
                 // legacy flag flow: build selection via probes and Defaults
                 let ref_file = ref_file.expect("--ref-file required (or use --manifest)");
                 let refp = load_probe(&ref_probe.expect("--ref-probe required")).expect("load ref probe");
-                let secp = if let (Some(secf), Some(p)) = (sec_file.as_ref(), sec_probe.as_ref()) {
+                let secp = if let (Some(_secf), Some(p)) = (sec_file.as_ref(), sec_probe.as_ref()) {
                     Some(load_probe(p).expect("load sec probe"))
                 } else { None };
-                let terp = if let (Some(terf), Some(p)) = (ter_file.as_ref(), ter_probe.as_ref()) {
+                let terp = if let (Some(_terf), Some(p)) = (ter_file.as_ref(), ter_probe.as_ref()) {
                     Some(load_probe(p).expect("load ter probe"))
                 } else { None };
 
@@ -177,7 +224,6 @@ fn main() {
                     }
                 }
                 if let Some(e) = vd.error { result["error"] = serde_json::json!(e); }
-                // recompute positive-only for single pair
                 let g = if vd.delay_ms < 0 { -vd.delay_ms } else { 0 };
                 result["global_shift_ms"] = serde_json::json!(g);
                 result["delays_ms_positive"]["sec"] = serde_json::json!(vd.delay_ms + g);
