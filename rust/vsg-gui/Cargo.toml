@@ -14,16 +14,10 @@ imgui-winit-support = { version = "=0.12.0" }
 imgui-glow-renderer = { version = "=0.12.0" }
 glow = "=0.13.1"
 
-# Windowing & GL
 winit = { version = "=0.29.15", features = ["x11", "wayland"] }
 glutin = "=0.31.3"
 glutin-winit = "=0.4.2"
 
-# our core crate
 vsg-core = { path = "../vsg-core" }
 
-# process spawning for mkvmerge/mkvextract
 which = "6.0"
-
-[features]
-default = []
