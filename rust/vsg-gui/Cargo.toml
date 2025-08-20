@@ -7,8 +7,12 @@ edition = "2021"
 vsg-core = { path = "../vsg-core" }
 
 imgui = "0.12"
-imgui-winit-support = "0.13"
-winit = { version = "0.30", features = ["x11", "wayland"] }
+imgui-winit-support = "0.12"
+imgui-glow-renderer = "0.12"
+
+# Pin to winit 0.28 to match imgui-winit-support 0.12 APIs (Linux backends enabled)
+winit = { version = "0.28", features = ["x11", "wayland"] }
+
 glow = "0.13"
 raw-window-handle = "0.6"
 

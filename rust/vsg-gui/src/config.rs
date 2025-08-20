@@ -2,13 +2,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ExtractionStrategy {
-    /// Reuse extracted audio if present; else extract; then analyze.
     Auto,
-    /// Always extract fresh; then analyze.
     ForceExtract,
-    /// Fail if extracted audio isn't present; do not extract.
     ReuseOnly,
-    /// Skip extraction, decode directly from MKV inputs.
     DecodeDirect,
 }
 

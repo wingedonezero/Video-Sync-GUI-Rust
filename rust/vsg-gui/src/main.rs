@@ -1,7 +1,6 @@
 use anyhow::{anyhow, Context, Result};
 use imgui::*;
 use imgui_winit_support::{HiDpiMode, WinitPlatform};
-use raw_window_handle::HasRawWindowHandle;
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,7 +13,7 @@ use winit::window::WindowBuilder;
 use vsg_core::analyze::audio_xcorr::{analyze_audio_xcorr_detailed, Band, Method, StereoMode, XCorrParams};
 use vsg_core::extract::run::run_mkvextract;
 use vsg_core::fsutil::{default_output_dir, default_work_dir};
-use vsg_core::model::{SelectionEntry, SelectionManifest};
+use vsg_core::model::{SelectionEntry, SelectionManifest, Source};
 
 mod config;
 use config::{ExtractionStrategy, Settings};
@@ -28,7 +27,6 @@ fn ensure_dir(p: &Path) -> Result<()> {
 }
 
 fn probe_tracks_with_mkvmerge(input: &str) -> Result<Vec<(u32, String, String)>> {
-    // returns (id, codec/codec_id lowercased, language or "und")
     let out = std::process::Command::new("mkvmerge").arg("-J").arg(input).output().context("spawn mkvmerge -J")?;
     if !out.status.success() {
         return Err(anyhow!("mkvmerge -J failed: {}", String::from_utf8_lossy(&out.stderr)));
@@ -78,11 +76,20 @@ fn build_manifest(ref_file:&str, sec_file:Option<&str>, ter_file:Option<&str>) -
     let mut ref_entries: Vec<SelectionEntry> = vec![];
     for (i,(id, codec, lang)) in ref_tracks.iter().enumerate() {
         if i == 0 { ref_first_lang = lang.clone(); }
-        ref_entries.push(SelectionEntry{ file_path: ref_file.into(), track_id: *id, r#type: "audio".into(), language: Some(lang.clone()), codec: Some(codec.clone()) });
+        ref_entries.push(SelectionEntry{
+            file_path: ref_file.into(),
+            track_id: *id,
+            r#type: "audio".into(),
+            language: Some(lang.clone()),
+            codec: Some(codec.clone()),
+            container_index: 0,
+            name: None,
+            source: Source::Ref,
+        });
     }
     let target_lang = ref_first_lang;
 
-    let mut pick_side = |file_opt:Option<&str>| -> Result<Vec<SelectionEntry>> {
+    let mut pick_side = |file_opt:Option<&str>, source:Source| -> Result<Vec<SelectionEntry>> {
         if let Some(file) = file_opt {
             let tracks = probe_tracks_with_mkvmerge(file)?;
             let mut first: Option<(u32,String,String)> = None;
@@ -92,29 +99,38 @@ fn build_manifest(ref_file:&str, sec_file:Option<&str>, ter_file:Option<&str>) -
                 if lang == target_lang { best = Some((id, codec.clone(), lang.clone())); break; }
             }
             let (id, codec, lang) = best.or(first).ok_or_else(|| anyhow!("no audio tracks in {}", file))?;
-            Ok(vec![ SelectionEntry{ file_path: file.into(), track_id:id, r#type:"audio".into(), language: Some(lang), codec: Some(codec) } ])
+            Ok(vec![ SelectionEntry{
+                file_path: file.into(),
+                track_id:id,
+                r#type:"audio".into(),
+                language: Some(lang),
+                codec: Some(codec),
+                container_index: 0,
+                name: None,
+                source,
+            } ])
         } else {
             Ok(vec![])
         }
     };
 
-    let sec_entries = pick_side(sec_file)?;
-    let ter_entries = pick_side(ter_file)?;
+    let sec_entries = pick_side(sec_file, Source::Sec)?;
+    let ter_entries = pick_side(ter_file, Source::Ter)?;
 
     Ok(SelectionManifest{ ref_tracks: ref_entries, sec_tracks: sec_entries, ter_tracks: ter_entries })
 }
 
-fn extract_if_needed(sel:&SelectionManifest, work:&Path, strategy:ExtractionStrategy) -> Result<()> {
+fn extract_if_needed(sel:&SelectionManifest, work:&PathBuf, strategy:ExtractionStrategy) -> Result<()> {
     let have_any = work.join("ref").exists() || work.join("sec").exists() || work.join("ter").exists();
     match strategy {
-        ExtractionStrategy::DecodeDirect => Ok(()), // skip extraction entirely
+        ExtractionStrategy::DecodeDirect => Ok(()),
         ExtractionStrategy::ReuseOnly => {
             if have_any { Ok(()) } else { Err(anyhow!("No extracted audio present under {}", work.display())) }
         }
         ExtractionStrategy::Auto => {
-            if have_any { Ok(()) } else { run_mkvextract(sel, work).context("mkvextract") }
+            if have_any { Ok(()) } else { run_mkvextract(sel, work).context("mkvextract").map(|_| ()) }
         }
-        ExtractionStrategy::ForceExtract => run_mkvextract(sel, work).context("mkvextract"),
+        ExtractionStrategy::ForceExtract => run_mkvextract(sel, work).context("mkvextract").map(|_| ()),
     }
 }
 
@@ -140,8 +156,8 @@ fn first_audio_under(dir:&Path) -> Option<String> {
 }
 
 fn main() -> Result<()> {
-    // --- imgui + winit setup ---
-    let event_loop = EventLoop::new()?;
+    // --- imgui + winit setup for winit 0.28 ---
+    let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("VSG GUI - Analyze")
         .with_inner_size(LogicalSize::new(1100.0, 700.0))
@@ -152,15 +168,9 @@ fn main() -> Result<()> {
     let mut platform = WinitPlatform::new(&mut imgui);
     platform.attach_window(imgui.io_mut(), &window, HiDpiMode::Default);
 
-    // simple glow GL context
-    let (gl, mut renderer) = {
-        use glow::HasContext as _;
-        let raw = unsafe {
-            glow::Context::from_loader_function(|s| window.get_proc_address(s) as *const _)
-        };
-        let renderer = imgui_glow_renderer::AutoRenderer::initialize(&mut imgui, &raw, |s| window.get_proc_address(s) as *const _)
-            .map_err(|e| anyhow!("renderer init: {:?}", e))?;
-        (raw, renderer)
+    let mut renderer = {
+        imgui_glow_renderer::AutoRenderer::initialize(glow::Context::from_loader_function(|s| window.get_proc_address(s) as *const _), &mut imgui)
+            .map_err(|e| anyhow!("renderer init: {:?}", e))?
     };
 
     // settings
@@ -174,21 +184,20 @@ fn main() -> Result<()> {
     let mut last_result: Option<String> = None;
 
     let mut last_frame = Instant::now();
-    event_loop.run(move |event, elwt| {
+    event_loop.run(move |event, _, control_flow| {
         platform.handle_event(imgui.io_mut(), &window, &event);
         match event {
-            Event::NewEvents(_) => {}
             Event::MainEventsCleared => {
                 window.request_redraw();
             }
             Event::RedrawRequested(_) => {
                 let io = imgui.io_mut();
-                platform.prepare_frame(io, &window).unwrap();
                 let delta = last_frame.elapsed();
                 io.update_delta_time(delta);
                 last_frame = Instant::now();
+                platform.prepare_frame(io, &window).unwrap();
 
-                let mut ui = imgui.frame();
+                let ui = imgui.frame();
 
                 ui.window("Analysis")
                     .size([1060.0, 300.0], Condition::FirstUseEver)
@@ -217,7 +226,7 @@ fn main() -> Result<()> {
                             ExtractionStrategy::DecodeDirect => 3,
                         };
                         let items = ["Auto", "ForceExtract", "ReuseOnly", "DecodeDirect"];
-                        if ComboBox::new("Extraction Strategy").build_simple_string(&ui, &mut strategy_idx, &items, |s| s) {
+                        if ComboBox::new(&ui, "Extraction Strategy").build_simple_string(&mut strategy_idx, &items) {
                             settings.strategy = match strategy_idx {
                                 1 => ExtractionStrategy::ForceExtract,
                                 2 => ExtractionStrategy::ReuseOnly,
@@ -235,14 +244,13 @@ fn main() -> Result<()> {
                             busy = true;
                             log_lines.push("Starting analysis...".into());
                             let s = settings.clone();
-                            let win = window.clone();
                             // Spawn worker thread
                             std::thread::spawn(move || {
                                 let run = || -> Result<String> {
                                     // Resolve dirs
                                     let exe = exe_dir();
-                                    let work = if s.work_dir.trim().is_empty() { exe.join("tmp_work") } else { PathBuf::from(&s.work_dir) };
-                                    let out = if s.out_dir.trim().is_empty() { exe.join("out") } else { PathBuf::from(&s.out_dir) };
+                                    let work: PathBuf = if s.work_dir.trim().is_empty() { exe.join("tmp_work") } else { PathBuf::from(&s.work_dir) };
+                                    let out: PathBuf = if s.out_dir.trim().is_empty() { exe.join("out") } else { PathBuf::from(&s.out_dir) };
                                     ensure_dir(&work)?; ensure_dir(&out)?;
                                     let manifest_dir = work.join("manifest");
                                     ensure_dir(&manifest_dir)?;
@@ -298,7 +306,7 @@ fn main() -> Result<()> {
                                         min_match: 0.8, stereo_mode: stereo, method, band
                                     };
 
-                                    // Duration: use ffprobe
+                                    // Duration: ffprobe
                                     let dur = {
                                         let out = std::process::Command::new("ffprobe")
                                             .args(["-v","error","-show_entries","format=duration","-of","default=noprint_wrappers=1:nokey=1"])
@@ -311,18 +319,24 @@ fn main() -> Result<()> {
 
                                     // SEC
                                     if let Some(sec_audio) = results["meta"]["sec_audio_path"].as_str().map(|s| s.to_string()) {
-                                        let (ns, ms, chunks) = do_analyze(&results["meta"]["ref_audio_path"].as_str().unwrap(), &sec_audio, dur, &params)?;
-                                        let summary = json!({"median_delay_ns": ns, "median_delay_ms": ms, "peak_max": chunks.iter().map(|c| c["peak"].as_f64().unwrap_or(0.0)).fold(0.0, f64::max)});
+                                        let (ns, ms, chunks) = do_analyze(results["meta"]["ref_audio_path"].as_str().unwrap(), &sec_audio, dur, &params)?;
+                                        let summary = json!({
+                                            "median_delay_ns": ns, "median_delay_ms": ms,
+                                            "peak_max": chunks.iter().map(|c| c["peak"].as_f64().unwrap_or(0.0)).fold(0.0, f64::max)
+                                        });
                                         results["runs"]["sec"] = json!({"language": null, "language_matched": null, "chunks": chunks, "summary": summary});
                                     }
                                     // TER
                                     if let Some(ter_audio) = results["meta"]["ter_audio_path"].as_str().map(|s| s.to_string()) {
-                                        let (ns, ms, chunks) = do_analyze(&results["meta"]["ref_audio_path"].as_str().unwrap(), &ter_audio, dur, &params)?;
-                                        let summary = json!({"median_delay_ns": ns, "median_delay_ms": ms, "peak_max": chunks.iter().map(|c| c["peak"].as_f64().unwrap_or(0.0)).fold(0.0, f64::max)});
+                                        let (ns, ms, chunks) = do_analyze(results["meta"]["ref_audio_path"].as_str().unwrap(), &ter_audio, dur, &params)?;
+                                        let summary = json!({
+                                            "median_delay_ns": ns, "median_delay_ms": ms,
+                                            "peak_max": chunks.iter().map(|c| c["peak"].as_f64().unwrap_or(0.0)).fold(0.0, f64::max)
+                                        });
                                         results["runs"]["ter"] = json!({"language": null, "language_matched": null, "chunks": chunks, "summary": summary});
                                     }
 
-                                    // Final block (compute global_shift_ms)
+                                    // Final block
                                     let mut delays = vec![];
                                     if let Some(ms) = results["runs"]["sec"]["summary"]["median_delay_ms"].as_i64() { delays.push(ms); }
                                     if let Some(ms) = results["runs"]["ter"]["summary"]["median_delay_ms"].as_i64() { delays.push(ms); }
@@ -342,16 +356,13 @@ fn main() -> Result<()> {
                                     // Write analysis.json
                                     let out_path = work.join("manifest").join("analysis.json");
                                     fs::write(&out_path, serde_json::to_string_pretty(&results)?)?;
-
                                     Ok(format!("Analysis done → {}", out_path.display()))
                                 };
                                 let msg = match run() {
                                     Ok(ok) => ok,
                                     Err(e) => format!("ERROR: {e:?}"),
                                 };
-                                // ping window to redraw by emitting a resize (hacky but fine)
-                                let _ = win.request_redraw();
-                                println!("{msg}");
+                                eprintln!("{msg}");
                             });
                         }
                     });
@@ -362,20 +373,18 @@ fn main() -> Result<()> {
                         for line in &log_lines { ui.text_wrapped(line); }
                     });
 
-                platform.prepare_render(&ui, &window);
-                unsafe { gl.clear_color(0.1,0.1,0.1,1.0); gl.clear(glow::COLOR_BUFFER_BIT); }
-                renderer.render(ui.render()).unwrap();
+                platform.prepare_render(&imgui, &window);
+                renderer.render(imgui.render()).unwrap();
             }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
                 // Save settings on exit
                 let _ = std::fs::write(exe_dir().join("vsg_settings.json"), serde_json::to_string_pretty(&settings).unwrap());
-                elwt.exit();
+                *control_flow = winit::event_loop::ControlFlow::Exit;
             }
             _ => {}
         }
-    })?;
+    });
 
-    // never reached
     #[allow(unreachable_code)]
     Ok(())
 }
