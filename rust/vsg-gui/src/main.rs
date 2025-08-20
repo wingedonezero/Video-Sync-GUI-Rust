@@ -8,10 +8,11 @@ use std::time::Instant;
 use winit::dpi::LogicalSize;
 use winit::event::{Event, WindowEvent};
 use winit::event_loop::EventLoop;
+use winit::window::Window;
 use winit::window::WindowBuilder;
 
-// Winit 0.29 raw handle traits (0.5)
-use raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle};
+// Winit 0.30 raw handle traits (0.6)
+use winit::raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 use glutin::prelude::*;
 use glutin_winit::DisplayBuilder;
@@ -60,20 +61,6 @@ fn probe_tracks_with_mkvmerge(input: &str) -> Result<Vec<(u32, String, String)>>
     Ok(res)
 }
 
-fn pick_ext_from_codec(codec: &str) -> &'static str {
-    match codec {
-        "aac" | "a_aac" | "mp4a" | "a_aac_mpeg2lc" | "a_aac_mpeg4lc" => "aac",
-        "ac3" | "a_ac3" => "ac3",
-        "eac3" | "e-ac-3" | "a_eac3" | "a_e-ac-3" => "eac3",
-        "dts" | "a_dts" | "a_dts_hd" | "a_dts-x" => "dts",
-        "truehd" | "a_truehd" => "thd",
-        "flac" | "a_flac" => "flac",
-        "opus" | "a_opus" => "opus",
-        "vorbis" | "a_vorbis" => "ogg",
-        _ => "bin"
-    }
-}
-
 fn build_manifest(ref_file:&str, sec_file:Option<&str>, ter_file:Option<&str>) -> Result<SelectionManifest> {
     let ref_tracks = probe_tracks_with_mkvmerge(ref_file)?;
     let mut ref_first_lang = "und".to_string();
@@ -93,7 +80,7 @@ fn build_manifest(ref_file:&str, sec_file:Option<&str>, ter_file:Option<&str>) -
     }
     let target_lang = ref_first_lang;
 
-    let mut pick_side = |file_opt:Option<&str>, source:Source| -> Result<Vec<SelectionEntry>> {
+    let pick_side = |file_opt:Option<&str>, source:Source| -> Result<Vec<SelectionEntry>> {
         if let Some(file) = file_opt {
             let tracks = probe_tracks_with_mkvmerge(file)?;
             let mut first: Option<(u32,String,String)> = None;
@@ -159,10 +146,7 @@ fn first_audio_under(dir:&Path) -> Option<String> {
     None
 }
 
-fn main() -> Result<()> {
-    // --- glutin + winit 0.29 setup (glutin 0.30, raw-window-handle 0.5) ---
-    let event_loop = EventLoop::new()?;
-
+fn create_window(event_loop: &EventLoop<()>) -> Result<(Window, glutin::config::Config, Display, glutin::display::Display)> {
     let template = ConfigTemplateBuilder::new().with_alpha_size(8).with_transparency(false);
     let display_builder = DisplayBuilder::new().with_window_builder(Some(
         WindowBuilder::new()
@@ -171,25 +155,34 @@ fn main() -> Result<()> {
     ));
 
     let (window_opt, gl_config) = display_builder
-        .build(&event_loop, template, |mut configs| configs.next().expect("no GL configs"))
+        .build(event_loop, template, |mut configs| configs.next().expect("no GL configs"))
         .map_err(|e| anyhow!("glutin-winit build: {e}"))?;
     let window = window_opt.expect("winit window");
 
-    // Raw handles from winit 0.29
-    let raw_display = unsafe {
+    // Raw handles from winit 0.30 (0.6)
+    let display = unsafe {
         Display::new(
-            window.raw_display_handle(),
-            // Prefer EGL on Linux; avoids Xlib hook wiring
+            window.display_handle().map_err(|e| anyhow!("display_handle: {e}"))?.as_raw(),
+            // Prefer EGL on Linux to simplify
             DisplayApiPreference::Egl
         )?
     };
 
+    Ok((window, gl_config, display, display.clone()))
+}
+
+fn main() -> Result<()> {
+    // --- glutin + winit 0.30 setup (raw-window-handle 0.6) ---
+    let event_loop = EventLoop::new()?;
+
+    let (window, gl_config, raw_display, _display_copy) = create_window(&event_loop)?;
+
     use std::num::NonZeroU32;
-    let context_attributes = ContextAttributesBuilder::new().build(Some(window.raw_window_handle()));
+    let context_attributes = ContextAttributesBuilder::new().build(Some(window.window_handle()?.as_raw()));
     let not_current = unsafe { raw_display.create_context(&gl_config, &context_attributes) }
         .map_err(|e| anyhow!("create_context: {e}"))?;
     let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
-        window.raw_window_handle(),
+        window.window_handle()?.as_raw(),
         NonZeroU32::new(1100).unwrap(),
         NonZeroU32::new(700).unwrap(),
     );
@@ -219,7 +212,7 @@ fn main() -> Result<()> {
     let mut busy = false;
 
     let mut last_frame = Instant::now();
-    event_loop.run(move |event, elwt| {
+    event_loop.run_app(move |event, elwt| {
         platform.handle_event(imgui.io_mut(), &window, &event);
         match event {
             Event::AboutToWait => {
@@ -296,23 +289,23 @@ fn main() -> Result<()> {
                                         let t = fs::read_to_string(&sel_path)?;
                                         serde_json::from_str::<SelectionManifest>(&t)?
                                     } else {
-                                        let sel = build_manifest(&s.ref_path, (!s.sec_path.is_empty()).then(|| s.sec_path.as_str()), (!s.ter_path.is_empty()).then(|| s.ter_path.as_str()))?;
+                                        let sel = super::build_manifest(&s.ref_path, (!s.sec_path.is_empty()).then(|| s.sec_path.as_str()), (!s.ter_path.is_empty()).then(|| s.ter_path.as_str()))?;
                                         fs::write(&sel_path, serde_json::to_string_pretty(&sel)?)?;
                                         sel
                                     };
 
                                     // Extract per strategy
-                                    extract_if_needed(&sel, &work, s.strategy)?;
+                                    super::extract_if_needed(&sel, &work, s.strategy)?;
 
                                     // Resolve audio files for analysis
-                                    let ref_audio = first_audio_under(&work.join("ref"))
+                                    let ref_audio = super::first_audio_under(&work.join("ref"))
                                         .or_else(|| (!s.ref_path.is_empty()).then(|| s.ref_path.clone()))
                                         .ok_or_else(|| anyhow!("no REF audio"))?;
                                     let mut results = serde_json::json!({
                                         "meta":{
                                             "ref_audio_path": ref_audio,
-                                            "sec_audio_path": first_audio_under(&work.join("sec")),
-                                            "ter_audio_path": first_audio_under(&work.join("ter"))
+                                            "sec_audio_path": super::first_audio_under(&work.join("sec")),
+                                            "ter_audio_path": super::first_audio_under(&work.join("ter"))
                                         },
                                         "params":{
                                             "chunks": s.chunks, "chunk_dur_s": s.chunk_dur_s, "sample_rate": &s.sample_rate,
@@ -354,7 +347,7 @@ fn main() -> Result<()> {
 
                                     // SEC
                                     if let Some(sec_audio) = results["meta"]["sec_audio_path"].as_str().map(|s| s.to_string()) {
-                                        let (ns, ms, chunks) = do_analyze(results["meta"]["ref_audio_path"].as_str().unwrap(), &sec_audio, dur, &params)?;
+                                        let (ns, ms, chunks) = super::do_analyze(results["meta"]["ref_audio_path"].as_str().unwrap(), &sec_audio, dur, &params)?;
                                         let summary = json!({
                                             "median_delay_ns": ns, "median_delay_ms": ms,
                                             "peak_max": chunks.iter().map(|c| c["peak"].as_f64().unwrap_or(0.0)).fold(0.0, f64::max)
@@ -363,7 +356,7 @@ fn main() -> Result<()> {
                                     }
                                     // TER
                                     if let Some(ter_audio) = results["meta"]["ter_audio_path"].as_str().map(|s| s.to_string()) {
-                                        let (ns, ms, chunks) = do_analyze(results["meta"]["ref_audio_path"].as_str().unwrap(), &ter_audio, dur, &params)?;
+                                        let (ns, ms, chunks) = super::do_analyze(results["meta"]["ref_audio_path"].as_str().unwrap(), &ter_audio, dur, &params)?;
                                         let summary = json!({
                                             "median_delay_ns": ns, "median_delay_ms": ms,
                                             "peak_max": chunks.iter().map(|c| c["peak"].as_f64().unwrap_or(0.0)).fold(0.0, f64::max)
@@ -389,7 +382,8 @@ fn main() -> Result<()> {
                                     });
 
                                     // Write analysis.json
-                                    let out_path = work.join("manifest").join("analysis.json");
+                                    let out_path = exe_dir().join("out").join("analysis.json");
+                                    fs::create_dir_all(out_path.parent().unwrap()).ok();
                                     fs::write(&out_path, serde_json::to_string_pretty(&results)?)?;
                                     Ok(format!("Analysis done → {}", out_path.display()))
                                 };
