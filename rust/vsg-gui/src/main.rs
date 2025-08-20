@@ -15,7 +15,7 @@ use glutin_winit::DisplayBuilder;
 use glutin::config::ConfigTemplateBuilder;
 use glutin::context::{ContextAttributesBuilder, NotCurrentGlContextSurfaceAccessor};
 use glutin::display::Display;
-use glutin::surface::{Surface, SurfaceAttributesBuilder, WindowSurface};
+use glutin::surface::{SurfaceAttributesBuilder, WindowSurface};
 
 use vsg_core::analyze::audio_xcorr::{analyze_audio_xcorr_detailed, Band, Method, StereoMode, XCorrParams};
 use vsg_core::extract::run::run_mkvextract;
@@ -161,20 +161,20 @@ fn main() -> Result<()> {
     let event_loop = EventLoop::new()?;
 
     let template = ConfigTemplateBuilder::new().with_alpha_size(8).with_transparency(false);
-    let display_builder = DisplayBuilder::new().with_window_attributes(Some(
+    let display_builder = DisplayBuilder::new().with_window_builder(Some(
         WindowBuilder::new()
             .with_title("VSG GUI - Analyze")
             .with_inner_size(LogicalSize::new(1100.0, 700.0))
     ));
 
     let (window, gl_config) = display_builder.build(&event_loop, template, |configs| {
-        // Just pick the first config; for production choose better
         configs.reduce(|acc, cfg| if cfg.num_samples() < acc.num_samples() { cfg } else { acc }).unwrap()
     })?;
 
     let window = window.expect("winit window");
     let raw_display = Display::new(window.raw_display_handle(), window.raw_window_handle())?;
 
+    use std::num::NonZeroU32;
     let context_attributes = ContextAttributesBuilder::new().build(Some(window.raw_window_handle()));
     let not_current = unsafe { raw_display.create_context(&gl_config, &context_attributes)? };
     let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
@@ -182,7 +182,6 @@ fn main() -> Result<()> {
         NonZeroU32::new(1100).unwrap(),
         NonZeroU32::new(700).unwrap(),
     );
-    use std::num::NonZeroU32;
     let surface = unsafe { raw_display.create_window_surface(&gl_config, &attrs)? };
     let context = not_current.make_current(&surface)?;
 
@@ -250,7 +249,7 @@ fn main() -> Result<()> {
                             ExtractionStrategy::DecodeDirect => 3,
                         };
                         let items = ["Auto", "ForceExtract", "ReuseOnly", "DecodeDirect"];
-                        if ComboBox::new(&ui, "Extraction Strategy").build_simple_string(&mut strategy_idx, &items) {
+                        if ui.combo_simple_string("Extraction Strategy", &mut strategy_idx, &items) {
                             settings.strategy = match strategy_idx {
                                 1 => ExtractionStrategy::ForceExtract,
                                 2 => ExtractionStrategy::ReuseOnly,
@@ -397,14 +396,13 @@ fn main() -> Result<()> {
                         for line in &log_lines { ui.text_wrapped(line); }
                     });
 
-                platform.prepare_render(&imgui, &window);
+                platform.prepare_render(&ui, &window);
                 renderer.render(imgui.render()).unwrap();
 
-                // swap buffers
+                // Swap buffers
                 surface.swap_buffers(&context).ok();
             }
             Event::WindowEvent { event: WindowEvent::CloseRequested, .. } => {
-                // Save settings on exit
                 let _ = std::fs::write(exe_dir().join("vsg_settings.json"), serde_json::to_string_pretty(&settings).unwrap());
                 elwt.exit();
             }
@@ -412,6 +410,5 @@ fn main() -> Result<()> {
         }
     })?;
 
-    #[allow(unreachable_code)]
     Ok(())
 }
