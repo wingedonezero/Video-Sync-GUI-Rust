@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use crate::error::VsgError;
 use rustfft::{num_complex::Complex, num_traits::Zero, FftPlanner};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StereoMode {
     Mono,
     Left,
@@ -14,13 +14,13 @@ pub enum StereoMode {
     Best, // compute L/L and R/R, pick stronger peak
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Method {
     Fft,
     Compat, // currently same as FFT correlation but kept for future exact Python parity
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Band {
     None,
     Voice, // ~100-3000 Hz
