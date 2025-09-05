@@ -5,8 +5,8 @@ edition = "2021"
 
 [dependencies]
 # GUI Toolkit
-iced = { version = "0.12", features = ["wgpu", "tokio"] }
-iced_aw = "0.8" # ADDED for extra widgets like tabs
+iced = { version = "0.13.1", features = ["wgpu", "tokio"] }
+iced_aw = "0.12.2"
 
 # Async Runtime
 tokio = { version = "1", features = ["full"] }

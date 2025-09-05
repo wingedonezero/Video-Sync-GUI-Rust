@@ -4,7 +4,10 @@ pub mod core;
 pub mod ui;
 
 use iced::widget::container;
-use iced::{executor, subscription, window, Application, Command, Element, Length, Settings, Size, Theme, Subscription};
+use iced::{
+    executor, subscription, window, Application, Command, Element, Length, Settings, Size, Theme,
+    Subscription,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -118,6 +121,17 @@ impl Application for VsgApp {
 
     fn view(&self) -> Element<Message> {
         // ... (this function is unchanged from the previous version)
+        // If your `ui::main_window::view` returns the whole main UI, render it here:
+        let base = crate::ui::main_window::view(self);
+
+        // Overlay the Options dialog if open
+        if let Some(d) = &self.options_dialog {
+            // If you prefer a layered overlay, you can implement a stack in your main view.
+            // For now, showing the dialog is enough.
+            return crate::ui::options_dialog::view(d);
+        }
+
+        base
     }
 
     fn update(&mut self, message: Message) -> Command<Message> {
@@ -126,8 +140,45 @@ impl Application for VsgApp {
             Message::SecPathChanged(path) => self.sec_path = path,
             // ... (other UI control messages are unchanged)
 
+            // ---------- Options dialog wiring (Open / Save / Cancel / live updates) ----------
+            Message::OpenSettings => {
+                self.options_dialog = Some(OptionsDialog::new(self.config.clone()));
+                return Command::none();
+            }
+
+            Message::OptionsMessage(options_dialog::DialogMessage::Save) => {
+                if let Some(dialog) = self.options_dialog.take() {
+                    self.config = dialog.pending_config;
+                    self.config.save();
+                    self.config.ensure_dirs_exist();
+
+                    // Keep UI flags in sync with config immediately
+                    self.archive_logs = self.config.archive_logs;
+                    self.auto_apply_strict = self.config.auto_apply_strict;
+
+                    self.status_text = "Settings saved.".to_string();
+                }
+                return Command::none();
+            }
+
+            Message::OptionsMessage(options_dialog::DialogMessage::Cancel) => {
+                self.options_dialog = None;
+                self.status_text = "Settings unchanged.".to_string();
+                return Command::none();
+            }
+
+            Message::OptionsMessage(other) => {
+                if let Some(dialog) = &mut self.options_dialog {
+                    dialog.update(other);
+                }
+                return Command::none();
+            }
+            // -------------------------------------------------------------------------------
+
             Message::StartJob(and_merge) => {
-                if self.is_running { return Command::none(); }
+                if self.is_running {
+                    return Command::none();
+                }
                 self.log_output.clear();
                 self.progress = 0.0;
                 self.status_text = "Discovering jobs...".to_string();
@@ -136,9 +187,10 @@ impl Application for VsgApp {
                 let sec_path = self.sec_path.clone();
                 let ter_path = self.ter_path.clone();
 
-                return Command::perform(async move {
-                    job_discovery::discover_jobs(&ref_path, &sec_path, &ter_path)
-                }, move |res| Message::JobsDiscovered(res, and_merge));
+                return Command::perform(
+                    async move { job_discovery::discover_jobs(&ref_path, &sec_path, &ter_path) },
+                                        move |res| Message::JobsDiscovered(res, and_merge),
+                );
             }
 
             Message::JobsDiscovered(Ok(jobs), and_merge) => {
@@ -168,11 +220,11 @@ impl Application for VsgApp {
                             self.manual_selection = None;
                             self.initial_layout = Some(layout);
                             self.is_running = true; // This will activate the subscription
-                        },
+                        }
                         Some(manual_selection_dialog::DialogResult::Cancel) => {
                             self.manual_selection = None;
                             self.status_text = "Ready".to_string();
-                        },
+                        }
                         None => {}
                     }
                 }
@@ -236,7 +288,10 @@ impl JobWorker {
                                      let (sender, mut receiver) = mpsc::channel(100);
                                      let pipeline = JobPipeline::new(state.config.clone(), sender.clone());
 
-                                     sender.send(Message::JobStarted(job.ref_file.clone())).await.ok();
+                                     sender
+                                     .send(Message::JobStarted(job.ref_file.clone()))
+                                     .await
+                                     .ok();
 
                                      let layout_result = if let Some(ref initial) = state.initial_layout {
                                          // This is a merge job
@@ -248,7 +303,8 @@ impl JobWorker {
 
                                      match layout_result {
                                          Ok(current_layout) => {
-                                             let pipeline_future = pipeline.run_job(&job, state.initial_layout.is_some(), &current_layout);
+                                             let pipeline_future =
+                                             pipeline.run_job(&job, state.initial_layout.is_some(), &current_layout);
 
                                              tokio::select! {
                                                  result = pipeline_future => {
@@ -264,7 +320,13 @@ impl JobWorker {
                                              }
                                          }
                                          Err(e) => {
-                                             sender.send(Message::JobFinished(format!("[ERROR] Failed to prepare layout: {}", e))).await.ok();
+                                             sender
+                                             .send(Message::JobFinished(format!(
+                                                 "[ERROR] Failed to prepare layout: {}",
+                                                 e
+                                             )))
+                                             .await
+                                             .ok();
                                          }
                                      }
                                      (receiver.recv().await, state)
@@ -288,10 +350,20 @@ struct WorkerState {
 }
 
 impl WorkerState {
-    fn new(config: AppConfig, mut jobs: Vec<Job>, initial_layout: Option<Vec<TrackSelection>>, auto_apply: bool, auto_apply_strict: bool) -> Self {
+    fn new(
+        config: AppConfig,
+        mut jobs: Vec<Job>,
+        initial_layout: Option<Vec<TrackSelection>>,
+        auto_apply: bool,
+        auto_apply_strict: bool,
+    ) -> Self {
         jobs.reverse(); // So we can pop from the end
         Self {
-            config, jobs, initial_layout, auto_apply, auto_apply_strict,
+            config,
+            jobs,
+            initial_layout,
+            auto_apply,
+            auto_apply_strict,
             last_layout_template: None,
             last_signature: None,
         }
@@ -302,7 +374,21 @@ fn generate_track_signature(tracks: &[Track], strict: bool) -> HashMap<String, u
     let mut signature = HashMap::new();
     for track in tracks {
         let key = if strict {
-            format!("{}_{}_{}_{}", track.r#type, track.source, track.properties.language.as_deref().unwrap_or("und"), track.properties.codec_id.as_deref().unwrap_or("N/A"))
+            format!(
+                "{}_{}_{}_{}",
+                track.r#type,
+                track.source,
+                track
+                .properties
+                .language
+                .as_deref()
+                .unwrap_or("und"),
+                    track
+                    .properties
+                    .codec_id
+                    .as_deref()
+                    .unwrap_or("N/A")
+            )
         } else {
             format!("{}_{}", track.r#type, track.source)
         };
@@ -311,11 +397,12 @@ fn generate_track_signature(tracks: &[Track], strict: bool) -> HashMap<String, u
     signature
 }
 
-async fn get_layout_for_job(state: &mut WorkerState, job: &Job, initial_layout: &[TrackSelection], sender: &mpsc::Sender<Message>) -> Result<Vec<TrackSelection>, String> {
-    // ... A full implementation of this logic is complex, for now we will just use the initial layout
-    // In a real implementation, this would involve probing the `job` file, generating its signature,
-    // comparing it to `state.last_signature`, and materializing `state.last_layout_template` if it matches.
-
-    // For now, we simplify: always use the initial layout.
+async fn get_layout_for_job(
+    state: &mut WorkerState,
+    job: &Job,
+    initial_layout: &[TrackSelection],
+    _sender: &mpsc::Sender<Message>,
+) -> Result<Vec<TrackSelection>, String> {
+    // For now, use the initial layout unchanged (as before).
     Ok(initial_layout.to_vec())
 }
