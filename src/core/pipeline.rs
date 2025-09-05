@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 
 use crate::core::config::AppConfig;
 use crate::core::process::CommandRunner;
-use crate::core::{analysis, mkv_utils};
+use crate::core::{analysis, mkv_utils, subtitle_utils};
 
 #[derive(Clone)]
 pub struct Job {
@@ -25,7 +25,9 @@ pub struct TrackSelection {
     pub is_default: bool,
     pub is_forced: bool,
     pub apply_track_name: bool,
-    // ... other options like subtitle conversions will go here
+    pub convert_to_ass: bool,
+    pub rescale: bool,
+    pub size_multiplier: f64,
 }
 
 pub struct JobPipeline {
@@ -38,13 +40,13 @@ impl JobPipeline {
         Self { config, log_sender }
     }
 
-    pub async fn run_job(&self, job: &Job, and_merge: bool) -> Result<String, String> {
-        let runner = CommandRunner::new(self.log_sender.clone());
+    pub async fn run_job(&self, job: &Job, and_merge: bool, layout: &[TrackSelection]) -> Result<String, String> {
+        let runner = CommandRunner::new(self.config.clone(), self.log_sender.clone());
         let temp_dir_name = format!("job_{}_{}", Path::new(&job.ref_file).file_stem().unwrap().to_str().unwrap(), chrono::Utc::now().timestamp());
         let temp_dir = PathBuf::from(&self.config.temp_root).join(temp_dir_name);
         fs::create_dir_all(&temp_dir).await.map_err(|e| e.to_string())?;
 
-        self.log_sender.send("--- Analysis Phase ---".to_string()).await.ok();
+        runner.send_log("--- Analysis Phase ---").await;
         let delay_sec = if let Some(sec_file) = &job.sec_file {
             let results = analysis::run_audio_correlation(&runner, &job.ref_file, sec_file, &temp_dir).await?;
             analysis::best_from_results(&results).map(|b| b.delay_ms)
@@ -53,56 +55,51 @@ impl JobPipeline {
 
         let delay_sec_val = delay_sec.unwrap_or(0);
         let delay_ter_val = delay_ter.unwrap_or(0);
-        self.log_sender.send(format!("Secondary delay determined: {} ms", delay_sec_val)).await.ok();
+        runner.send_log(&format!("Secondary delay determined: {} ms", delay_sec_val)).await;
 
         if !and_merge {
             fs::remove_dir_all(&temp_dir).await.ok();
             return Ok(format!("Analysis Complete.\n  - Secondary Delay: {} ms\n  - Tertiary Delay: {} ms", delay_sec_val, delay_ter_val));
         }
 
-        self.log_sender.send("--- Merge Planning Phase ---".to_string()).await.ok();
+        runner.send_log("--- Merge Planning Phase ---").await;
         let min_delay = 0i64.min(delay_sec_val).min(delay_ter_val);
         let global_shift = if min_delay < 0 { -min_delay } else { 0 };
-        self.log_sender.send(format!("[Delay] Applying lossless global shift: +{} ms", global_shift)).await.ok();
+        runner.send_log(&format!("[Delay] Applying lossless global shift: +{} ms", global_shift)).await;
 
-        // --- Create a detailed placeholder layout for testing ---
-        let mut placeholder_layout = Vec::new();
-        let ref_info = mkv_utils::get_stream_info(&runner, &job.ref_file).await?;
-        let ref_extracted = mkv_utils::extract_tracks(&runner, Path::new(&job.ref_file), &ref_info.tracks, &temp_dir).await?;
-        for (i, track) in ref_extracted.into_iter().enumerate() {
-            placeholder_layout.push(TrackSelection {
-                source: "REF".to_string(),
-                                    extracted_path: track.path,
-                                    is_default: i < 2, // Make first video and audio default
-                                    is_forced: false,
-                                    apply_track_name: true,
-                                    original_track: track.original_track,
-            });
-        }
+        let mut final_layout = layout.to_vec();
 
-        if let Some(sec_file) = &job.sec_file {
-            let sec_info = mkv_utils::get_stream_info(&runner, sec_file).await?;
-            let sec_extracted = mkv_utils::extract_tracks(&runner, Path::new(sec_file), &sec_info.tracks, &temp_dir).await?;
-            for track in sec_extracted {
-                placeholder_layout.push(TrackSelection {
-                    source: "SEC".to_string(),
-                                        extracted_path: track.path,
-                                        is_default: false,
-                                        is_forced: false,
-                                        apply_track_name: true,
-                                        original_track: track.original_track,
-                });
+        runner.send_log("--- Subtitle Processing Phase ---").await;
+        for selection in &mut final_layout {
+            if selection.original_track.r#type == "subtitles" {
+                if selection.convert_to_ass {
+                    let new_path = subtitle_utils::convert_srt_to_ass(&runner, &selection.extracted_path).await?;
+                    selection.extracted_path = new_path;
+                }
+                if selection.rescale {
+                    subtitle_utils::rescale_subtitle(&runner, &selection.extracted_path, &job.ref_file).await?;
+                }
+                if (selection.size_multiplier - 1.0).abs() > 1e-9 {
+                    let content = subtitle_utils::read_subtitle_file(&selection.extracted_path)?;
+                    let (new_content, count) = subtitle_utils::multiply_font_size(&content, selection.size_multiplier);
+                    if count > 0 {
+                        subtitle_utils::write_subtitle_file(&selection.extracted_path, &new_content)?;
+                        runner.send_log(&format!("[Font Size] Modified {} style definition(s).", count)).await;
+                    }
+                }
             }
         }
-        // --- End of placeholder layout ---
 
         let chapters_path = mkv_utils::process_chapters(&runner, &job.ref_file, &temp_dir, global_shift, &self.config).await?;
+        let ter_attachments = if let Some(ter_file) = &job.ter_file {
+            mkv_utils::extract_attachments(&runner, ter_file, &temp_dir).await?
+        } else { vec![] };
 
-        self.log_sender.send("--- Merge Execution ---".to_string()).await.ok();
+        runner.send_log("--- Merge Execution ---").await;
         let output_filename = Path::new(&job.ref_file).file_name().unwrap();
         let output_path = PathBuf::from(&self.config.output_folder).join(output_filename);
 
-        let tokens = self.build_mkvmerge_tokens(&output_path, global_shift, delay_sec, delay_ter, &placeholder_layout, chapters_path.as_deref());
+        let tokens = self.build_mkvmerge_tokens(&output_path, global_shift, delay_sec, delay_ter, &final_layout, chapters_path.as_deref(), &ter_attachments);
 
         let opts_path = temp_dir.join("opts.json");
         fs::write(&opts_path, serde_json::to_string(&tokens).unwrap()).await.map_err(|e| e.to_string())?;
@@ -126,6 +123,7 @@ impl JobPipeline {
         delay_ter: Option<i64>,
         layout: &[TrackSelection],
         chapters_path: Option<&Path>,
+        attachments: &[PathBuf],
     ) -> Vec<String> {
         let mut tokens = vec!["--output".to_string(), output_path.to_string_lossy().to_string()];
 
@@ -143,14 +141,16 @@ impl JobPipeline {
             let sync = match selection.source.as_str() {
                 "SEC" => delay_sec.unwrap_or(0) + global_shift,
                 "TER" => delay_ter.unwrap_or(0) + global_shift,
-                _ => global_shift, // REF
+                _ => global_shift,
             };
             tokens.extend_from_slice(&["--sync".to_string(), format!("{}:{}", track_id_in_file, sync)]);
             tokens.extend_from_slice(&["--language".to_string(), format!("{}:{}", track_id_in_file, track.properties.language.as_deref().unwrap_or("und"))]);
 
             if selection.apply_track_name {
                 if let Some(name) = &track.properties.track_name {
-                    tokens.extend_from_slice(&["--track-name".to_string(), format!("{}:{}", track_id_in_file, name)]);
+                    if !name.is_empty() {
+                        tokens.extend_from_slice(&["--track-name".to_string(), format!("{}:{}", track_id_in_file, name)]);
+                    }
                 }
             }
 
@@ -162,11 +162,13 @@ impl JobPipeline {
 
             if self.config.apply_dialog_norm_gain {
                 if let Some(codec) = &track.properties.codec_id {
-                    if codec.contains("AC3") {
+                    if codec.contains("AC3") { // Simplified check for E-AC3 as well
                         tokens.extend_from_slice(&["--remove-dialog-normalization-gain".to_string(), format!("{}:1", track_id_in_file)]);
                     }
                 }
             }
+            tokens.push("--compression".to_string());
+            tokens.push(format!("{}:none", track_id_in_file));
 
             tokens.extend_from_slice(&["(".to_string(), selection.extracted_path.to_string_lossy().to_string(), ")".to_string()]);
             track_order.push(format!("{}:{}", file_id_counter, track_id_in_file));
@@ -175,6 +177,10 @@ impl JobPipeline {
 
         if let Some(path) = chapters_path {
             tokens.extend_from_slice(&["--chapters".to_string(), path.to_string_lossy().to_string()]);
+        }
+
+        for att_path in attachments {
+            tokens.extend_from_slice(&["--attach-file".to_string(), att_path.to_string_lossy().to_string()]);
         }
 
         if !track_order.is_empty() {

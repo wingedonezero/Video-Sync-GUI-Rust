@@ -4,40 +4,38 @@ use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::mpsc;
+use crate::core::config::AppConfig;
 
-/// A simple struct to hold the result of a command execution.
 #[derive(Debug)]
 pub struct CommandResult {
     pub stdout: String,
     pub exit_code: i32,
 }
 
-/// Asynchronously runs external commands and streams their output.
-#[derive(Debug)]
 pub struct CommandRunner {
-    // A channel to send log messages back to the UI thread.
+    config: AppConfig,
     log_sender: mpsc::Sender<String>,
 }
 
 impl CommandRunner {
-    /// Creates a new CommandRunner.
-    pub fn new(log_sender: mpsc::Sender<String>) -> Self {
-        CommandRunner { log_sender }
+    pub fn new(config: AppConfig, log_sender: mpsc::Sender<String>) -> Self {
+        CommandRunner { config, log_sender }
     }
 
-    /// Runs a command, streams its output to the logger, and returns the full stdout.
+    // Helper to allow other modules to send logs easily.
+    pub async fn send_log(&self, msg: &str) {
+        self.log_sender.send(msg.to_string()).await.ok();
+    }
+
     pub async fn run(&self, program: &str, args: &[&str]) -> Result<CommandResult, String> {
         let command_str = format!("{} {}", program, args.join(" "));
         self.log_sender.send(format!("$ {}", command_str)).await.ok();
 
         let mut cmd = Command::new(program);
-        cmd.args(args);
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped()); // Capture stderr as well
+        cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         let mut child = cmd.spawn().map_err(|e| e.to_string())?;
 
-        // We combine stdout and stderr into one stream for logging.
         let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
         let stderr = child.stderr.take().ok_or("Failed to capture stderr")?;
 
@@ -45,42 +43,41 @@ impl CommandRunner {
         let mut stderr_reader = BufReader::new(stderr).lines();
 
         let mut full_stdout = String::new();
+        let mut last_progress = -1isize;
+        let progress_step = self.config.log_progress_step as isize;
 
         loop {
             tokio::select! {
-                // Read a line from stdout
                 result = stdout_reader.next_line() => {
                     match result {
                         Ok(Some(line)) => {
-                            self.log_sender.send(line.clone()).await.ok();
+                            // Faithful port of the compact logging logic for progress bars
+                            if self.config.log_compact && line.starts_with("Progress: ") {
+                                if let Ok(pct) = line.trim_start_matches("Progress: ").trim_end_matches('%').parse::<isize>() {
+                                    if last_progress < 0 || pct >= last_progress + progress_step || pct == 100 {
+                                        self.log_sender.send(line.clone()).await.ok();
+                                        last_progress = pct;
+                                    }
+                                }
+                            } else {
+                                self.log_sender.send(line.clone()).await.ok();
+                            }
                             full_stdout.push_str(&line);
                             full_stdout.push('\n');
                         }
-                        Ok(None) => break, // stdout is closed
-                        Err(e) => {
-                            self.log_sender.send(format!("Error reading stdout: {}", e)).await.ok();
-                            break;
-                        }
+                        Ok(None) => break, // stdout closed
+                        Err(_) => break, // Error reading line
                     }
                 },
-                // Read a line from stderr
                 result = stderr_reader.next_line() => {
-                    match result {
-                        Ok(Some(line)) => {
-                            // We can prefix stderr lines to distinguish them in the log
-                            self.log_sender.send(format!("[STDERR] {}", line)).await.ok();
-                        }
-                        Ok(None) => {}, // stderr can close before stdout
-                        Err(e) => {
-                            self.log_sender.send(format!("Error reading stderr: {}", e)).await.ok();
-                        }
+                    if let Ok(Some(line)) = result {
+                        self.log_sender.send(format!("[STDERR] {}", line)).await.ok();
                     }
                 }
             }
         }
 
         let status = child.wait().await.map_err(|e| e.to_string())?;
-
         Ok(CommandResult {
             stdout: full_stdout,
             exit_code: status.code().unwrap_or(1),
