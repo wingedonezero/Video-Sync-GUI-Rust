@@ -40,7 +40,7 @@ impl JobPipeline {
         Self { config, log_sender }
     }
 
-    pub async fn run_job(&self, job: &Job, and_merge: bool, layout: &[TrackSelection]) -> Result<String, String> {
+    pub async fn run_job(&self, job: &Job, and_merge: bool, layout: &mut [TrackSelection]) -> Result<String, String> {
         let runner = CommandRunner::new(self.config.clone(), self.log_sender.clone());
         let temp_dir_name = format!("job_{}_{}", Path::new(&job.ref_file).file_stem().unwrap().to_str().unwrap(), chrono::Utc::now().timestamp());
         let temp_dir = PathBuf::from(&self.config.temp_root).join(temp_dir_name);
@@ -67,10 +67,8 @@ impl JobPipeline {
         let global_shift = if min_delay < 0 { -min_delay } else { 0 };
         runner.send_log(&format!("[Delay] Applying lossless global shift: +{} ms", global_shift)).await;
 
-        let mut final_layout = layout.to_vec();
-
         runner.send_log("--- Subtitle Processing Phase ---").await;
-        for selection in &mut final_layout {
+        for selection in layout.iter_mut() {
             if selection.original_track.r#type == "subtitles" {
                 if selection.convert_to_ass {
                     let new_path = subtitle_utils::convert_srt_to_ass(&runner, &selection.extracted_path).await?;
@@ -99,7 +97,7 @@ impl JobPipeline {
         let output_filename = Path::new(&job.ref_file).file_name().unwrap();
         let output_path = PathBuf::from(&self.config.output_folder).join(output_filename);
 
-        let tokens = self.build_mkvmerge_tokens(&output_path, global_shift, delay_sec, delay_ter, &final_layout, chapters_path.as_deref(), &ter_attachments);
+        let tokens = self.build_mkvmerge_tokens(&output_path, global_shift, delay_sec, delay_ter, layout, chapters_path.as_deref(), &ter_attachments);
 
         let opts_path = temp_dir.join("opts.json");
         fs::write(&opts_path, serde_json::to_string(&tokens).unwrap()).await.map_err(|e| e.to_string())?;
@@ -135,7 +133,7 @@ impl JobPipeline {
         let mut file_id_counter = 0;
 
         for selection in layout {
-            let track_id_in_file = 0; // Each extracted file has only one track
+            let track_id_in_file = 0;
             let track = &selection.original_track;
 
             let sync = match selection.source.as_str() {
@@ -162,7 +160,7 @@ impl JobPipeline {
 
             if self.config.apply_dialog_norm_gain {
                 if let Some(codec) = &track.properties.codec_id {
-                    if codec.contains("AC3") { // Simplified check for E-AC3 as well
+                    if codec.contains("AC3") {
                         tokens.extend_from_slice(&["--remove-dialog-normalization-gain".to_string(), format!("{}:1", track_id_in_file)]);
                     }
                 }

@@ -1,10 +1,9 @@
 // src/core/config.rs
-
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-// Helper functions (unchanged)
+// Helper functions to provide default values for the config struct.
 fn default_output_folder() -> String { "sync_output".to_string() }
 fn default_temp_root() -> String { "temp_work".to_string() }
 fn default_analysis_mode() -> String { "Audio Correlation".to_string() }
@@ -21,7 +20,6 @@ fn default_log_error_tail() -> u32 { 20 }
 fn default_log_progress_step() -> u32 { 20 }
 fn default_archive_logs() -> bool { true }
 
-// --- MODIFIED: Added `Clone` to the list of derived traits ---
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AppConfig {
     #[serde(default)]
@@ -88,18 +86,12 @@ pub struct AppConfig {
     pub auto_apply_strict: bool,
 }
 
-// ... (impl AppConfig and impl Default for AppConfig are unchanged)
 impl AppConfig {
-    fn get_settings_path() -> PathBuf {
-        PathBuf::from("settings.json")
-    }
+    fn get_settings_path() -> PathBuf { PathBuf::from("settings.json") }
 
     pub fn load() -> Self {
         let path = Self::get_settings_path();
-        if !path.exists() {
-            return AppConfig::default();
-        }
-
+        if !path.exists() { return AppConfig::default(); }
         let content = fs::read_to_string(path).unwrap_or_default();
         serde_json::from_str(&content).unwrap_or_default()
     }

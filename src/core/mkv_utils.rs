@@ -15,7 +15,6 @@ pub struct TrackProperties {
     pub codec_id: Option<String>,
     pub language: Option<String>,
     pub track_name: Option<String>,
-    // Add fields needed for A_MS/ACM fallback
     pub audio_bits_per_sample: Option<u32>,
 }
 
@@ -102,24 +101,22 @@ fn pcm_codec_from_bit_depth(bit_depth: Option<u32>) -> &'static str {
     }
 }
 
-pub async fn extract_tracks(runner: &CommandRunner, source_file: &Path, tracks: &[Track], temp_dir: &Path, role: &str) -> Result<Vec<ExtractedTrack>, String> {
-    if tracks.is_empty() { return Ok(vec![]); }
+pub async fn extract_tracks(runner: &CommandRunner, source_file: &Path, tracks_to_select: &[Track], temp_dir: &Path, role: &str) -> Result<Vec<ExtractedTrack>, String> {
+    if tracks_to_select.is_empty() { return Ok(vec![]); }
 
     let mut mkvextract_specs = Vec::new();
     let mut ffmpeg_jobs = Vec::new();
     let mut extracted_tracks = Vec::new();
-    let mut audio_idx_counter = -1;
-    let total_audio_tracks = tracks.iter().filter(|t| t.r#type == "audio").count();
 
     let all_source_tracks = get_stream_info(runner, &source_file.to_string_lossy()).await?.tracks;
     let mut current_audio_idx = -1;
 
-    for (i, track_info) in all_source_tracks.iter().enumerate() {
+    for track_info in all_source_tracks.iter() {
         if track_info.r#type == "audio" {
             current_audio_idx += 1;
         }
 
-        if let Some(track_to_extract) = tracks.iter().find(|t| t.id == track_info.id) {
+        if let Some(track_to_extract) = tracks_to_select.iter().find(|t| t.id == track_info.id) {
             let codec = track_info.properties.codec_id.as_deref().unwrap_or("");
             let ext = ext_for_codec(&track_info.r#type, codec);
             let out_path = temp_dir.join(format!("{}_track_{}_{}.{}", role, source_file.file_stem().unwrap().to_string_lossy(), track_info.id, ext));
@@ -181,17 +178,115 @@ pub async fn extract_attachments(runner: &CommandRunner, source_file: &str, temp
     Ok(out_paths)
 }
 
+async fn probe_keyframes(runner: &CommandRunner, file_path: &str) -> Result<Vec<u64>, String> {
+    let result = runner.run("ffprobe", &[
+        "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "packet=pts_time,flags",
+        "-of", "json", file_path
+    ]).await?;
+    if result.exit_code != 0 { return Err("ffprobe failed to get keyframes".to_string()); }
+
+    let ffprobe_data: FfprobeOutput = serde_json::from_str(&result.stdout)
+    .map_err(|e| format!("Failed to parse ffprobe JSON: {}", e))?;
+
+    let mut keyframes_ns: Vec<u64> = ffprobe_data.packets.into_iter()
+    .filter(|p| p.flags.contains('K'))
+    .filter_map(|p| p.pts_time.parse::<f64>().ok())
+    .map(|t| (t * 1_000_000_000.0) as u64)
+    .collect();
+
+    keyframes_ns.sort_unstable();
+    Ok(keyframes_ns)
+}
 
 pub async fn process_chapters(runner: &CommandRunner, ref_file: &str, temp_dir: &Path, shift_ms: i64, config: &AppConfig) -> Result<Option<PathBuf>, String> {
     let result = runner.run("mkvextract", &["chapters", ref_file, "-"]).await?;
     if result.exit_code != 0 || result.stdout.trim().is_empty() {
+        runner.send_log("No chapters found in reference file.").await;
         return Ok(None);
     }
 
-    // The rest of this function will be implemented in the next batch to keep this update manageable.
-    // For now, it just extracts and saves the original chapters.
     let out_path = temp_dir.join(format!("{}_chapters_processed.xml", Path::new(ref_file).file_stem().unwrap().to_string_lossy()));
-    fs::write(&out_path, &result.stdout).map_err(|e| e.to_string())?;
+    let input_xml = result.stdout.trim_start_matches('\u{feff}'); // Remove BOM
+
+    // Read all events into memory to allow modification
+    let parser = EventReader::new(input_xml.as_bytes());
+    let mut events: Vec<XmlEvent> = parser.into_iter().collect::<Result<_,_>>().map_err(|e| e.to_string())?;
+
+    // --- Perform transformations on the event stream ---
+
+    // 1. Shift Timestamps & Rename
+    let shift_ns = shift_ms * 1_000_000;
+    let mut rename_counter = 0;
+    let mut in_time_tag: Option<String> = None;
+    let mut in_display_tag = false;
+
+    for event in &mut events {
+        match event {
+            XmlEvent::StartElement { name, .. } => {
+                let local_name = &name.local_name;
+                if local_name == "ChapterTimeStart" || local_name == "ChapterTimeEnd" {
+                    in_time_tag = Some(local_name.clone());
+                }
+                if local_name == "ChapterDisplay" {
+                    in_display_tag = true;
+                    if config.rename_chapters {
+                        rename_counter += 1;
+                    }
+                }
+            }
+            XmlEvent::EndElement { name } => {
+                in_time_tag = None;
+                if name.local_name == "ChapterDisplay" {
+                    in_display_tag = false;
+                }
+            }
+            XmlEvent::Characters(s) => {
+                if let Some(tag_name) = &in_time_tag {
+                    if let Ok(ns) = parse_time_ns(s) {
+                        let new_ns = ns.saturating_add_signed(shift_ns);
+                        *s = format_time_ns(new_ns);
+                    }
+                } else if in_display_tag && config.rename_chapters {
+                    // Replace the chapter string
+                    if let Some(parent_name) = event.as_start_element().map(|e| &e.name.local_name) {
+                        if parent_name == "ChapterString" {
+                            *s = format!("Chapter {:02}", rename_counter);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // 2. Snap to Keyframes
+    if config.snap_chapters {
+        if let Ok(keyframes) = probe_keyframes(runner, ref_file).await {
+            if !keyframes.is_empty() {
+                // Perform snapping logic (this is complex, needs careful implementation)
+                // For now, we'll log that we would snap here.
+                runner.send_log(&format!("[Chapters] Found {} keyframes for snapping (snapping logic to be fully implemented).", keyframes.len())).await;
+            }
+        }
+    }
+
+    // 3. Normalize end times (requires another pass or more complex state management)
+    // For now, this is a placeholder.
+
+    // --- Write modified events back to file ---
+    let file = File::create(&out_path).map_err(|e| e.to_string())?;
+    let mut writer = EmitterConfig::new().perform_indent(true).create_writer(file);
+    for event in events {
+        if let Some(writer_event) = event.as_writer_event() {
+            writer.write(writer_event).map_err(|e| e.to_string())?;
+        }
+    }
 
     Ok(Some(out_path))
 }
+
+
+// Helper functions for chapter time conversion
+fn parse_time_ns(t: &str) -> Result<u64, ()> { /* ... Unchanged ... */ }
+fn format_time_ns(ns: u64) -> String { /* ... Unchanged ... */ }

@@ -22,7 +22,6 @@ impl CommandRunner {
         CommandRunner { config, log_sender }
     }
 
-    // Helper to allow other modules to send logs easily.
     pub async fn send_log(&self, msg: &str) {
         self.log_sender.send(msg.to_string()).await.ok();
     }
