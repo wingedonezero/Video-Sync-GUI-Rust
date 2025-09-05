@@ -1,5 +1,5 @@
 // src/core/process.rs
-
+use std::collections::VecDeque;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -45,18 +45,29 @@ impl CommandRunner {
         let mut last_progress = -1isize;
         let progress_step = self.config.log_progress_step as isize;
 
+        let mut tail_buffer: VecDeque<String> = VecDeque::with_capacity(self.config.log_error_tail as usize + 1);
+
         loop {
             tokio::select! {
                 result = stdout_reader.next_line() => {
                     match result {
                         Ok(Some(line)) => {
-                            // Faithful port of the compact logging logic for progress bars
-                            if self.config.log_compact && line.starts_with("Progress: ") {
-                                if let Ok(pct) = line.trim_start_matches("Progress: ").trim_end_matches('%').parse::<isize>() {
-                                    if last_progress < 0 || pct >= last_progress + progress_step || pct == 100 {
-                                        self.log_sender.send(line.clone()).await.ok();
-                                        last_progress = pct;
+                            if self.config.log_compact {
+                                if line.starts_with("Progress: ") {
+                                    if let Ok(pct) = line.trim_start_matches("Progress: ").trim_end_matches('%').parse::<isize>() {
+                                        if last_progress < 0 || pct >= last_progress + progress_step || pct == 100 {
+                                            self.log_sender.send(line.clone()).await.ok();
+                                            last_progress = pct;
+                                        }
                                     }
+                                } else {
+                                    self.log_sender.send(line.clone()).await.ok();
+                                }
+                                if self.config.log_error_tail > 0 {
+                                    if tail_buffer.len() == self.config.log_error_tail as usize {
+                                        tail_buffer.pop_front();
+                                    }
+                                    tail_buffer.push_back(line.clone());
                                 }
                             } else {
                                 self.log_sender.send(line.clone()).await.ok();
@@ -64,19 +75,35 @@ impl CommandRunner {
                             full_stdout.push_str(&line);
                             full_stdout.push('\n');
                         }
-                        Ok(None) => break, // stdout closed
-                        Err(_) => break, // Error reading line
+                        Ok(None) => break,
+                        Err(_) => break,
                     }
                 },
                 result = stderr_reader.next_line() => {
                     if let Ok(Some(line)) = result {
-                        self.log_sender.send(format!("[STDERR] {}", line)).await.ok();
+                        let log_line = format!("[STDERR] {}", line);
+                        self.log_sender.send(log_line.clone()).await.ok();
+                        if self.config.log_error_tail > 0 {
+                            if tail_buffer.len() == self.config.log_error_tail as usize {
+                                tail_buffer.pop_front();
+                            }
+                            tail_buffer.push_back(log_line);
+                        }
                     }
                 }
             }
         }
 
         let status = child.wait().await.map_err(|e| e.to_string())?;
+
+        if !status.success() && self.config.log_compact && self.config.log_error_tail > 0 {
+            self.log_sender.send("\n--- Last output on error ---".to_string()).await.ok();
+            for line in tail_buffer {
+                self.log_sender.send(line).await.ok();
+            }
+            self.log_sender.send("--------------------------".to_string()).await.ok();
+        }
+
         Ok(CommandResult {
             stdout: full_stdout,
             exit_code: status.code().unwrap_or(1),

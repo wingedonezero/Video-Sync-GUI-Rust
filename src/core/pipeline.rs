@@ -51,7 +51,7 @@ impl JobPipeline {
             let results = analysis::run_audio_correlation(&runner, &job.ref_file, sec_file, &temp_dir).await?;
             analysis::best_from_results(&results).map(|b| b.delay_ms)
         } else { None };
-        let delay_ter = None; // Placeholder
+        let delay_ter = None; // Placeholder for now
 
         let delay_sec_val = delay_sec.unwrap_or(0);
         let delay_ter_val = delay_ter.unwrap_or(0);
@@ -133,7 +133,7 @@ impl JobPipeline {
         let mut file_id_counter = 0;
 
         for selection in layout {
-            let track_id_in_file = 0;
+            let track_id_in_file = 0; // Each extracted file has only one track
             let track = &selection.original_track;
 
             let sync = match selection.source.as_str() {
@@ -160,7 +160,7 @@ impl JobPipeline {
 
             if self.config.apply_dialog_norm_gain {
                 if let Some(codec) = &track.properties.codec_id {
-                    if codec.contains("AC3") {
+                    if codec.contains("AC3") { // Simplified check for E-AC3 as well
                         tokens.extend_from_slice(&["--remove-dialog-normalization-gain".to_string(), format!("{}:1", track_id_in_file)]);
                     }
                 }

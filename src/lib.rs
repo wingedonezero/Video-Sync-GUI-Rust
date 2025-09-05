@@ -179,31 +179,29 @@ async fn run_job_task(job: Job, config: AppConfig, and_merge: bool) -> Result<St
     }
     let (tx, mut rx) = tokio::sync::mpsc::channel(100);
     let log_clone = tx.clone();
-    tokio::spawn(async move {
-        while let Some(log) = rx.recv().await {
-            println!("[LOG] {}", log);
-        }
-    });
+    tokio::spawn(async move { while let Some(log) = rx.recv().await { println!("[LOG] {}", log); }});
 
-    // We now create the layout here, before calling the pipeline.
-    let mut placeholder_layout = create_test_layout(&job, &config, log_clone.clone()).await?;
-
-    let pipeline = JobPipeline::new(config, tx);
-    pipeline.run_job(&job, and_merge, &mut placeholder_layout).await
-}
-
-// Helper to create a detailed placeholder layout for testing the full pipeline
-async fn create_test_layout(job: &Job, config: &AppConfig, log_sender: mpsc::Sender<String>) -> Result<Vec<TrackSelection>, String> {
-    let mut layout = Vec::new();
-    let runner = process::CommandRunner::new(config.clone(), log_sender);
-
-    // In a real run, this temp dir would be the main one for the job.
+    // Create a temporary directory for the placeholder layout's extracted files
     let temp_dir = PathBuf::from(&config.temp_root).join(format!("layout_test_{}", chrono::Utc::now().timestamp()));
     fs::create_dir_all(&temp_dir).await.map_err(|e|e.to_string())?;
 
-    // Get all tracks from reference file
-    let ref_info = mkv_utils::get_stream_info(&runner, &job.ref_file).await?;
-    let ref_extracted = mkv_utils::extract_tracks(&runner, Path::new(&job.ref_file), &ref_info.tracks, &temp_dir, "ref").await?;
+    let runner = process::CommandRunner::new(config.clone(), log_clone);
+    let mut placeholder_layout = create_test_layout(&job, &runner, &temp_dir).await?;
+
+    let pipeline = JobPipeline::new(config, tx);
+    let result = pipeline.run_job(&job, and_merge, &mut placeholder_layout).await;
+
+    fs::remove_dir_all(&temp_dir).await.ok();
+    result
+}
+
+// Helper to create a detailed placeholder layout for testing the full pipeline
+async fn create_test_layout(job: &Job, runner: &process::CommandRunner, temp_dir: &Path) -> Result<Vec<TrackSelection>, String> {
+    let mut layout = Vec::new();
+
+    let ref_info = mkv_utils::get_stream_info(runner, &job.ref_file).await?;
+    let ref_tracks_to_extract: Vec<_> = ref_info.tracks.iter().cloned().collect();
+    let ref_extracted = mkv_utils::extract_tracks(runner, Path::new(&job.ref_file), &ref_tracks_to_extract, temp_dir, "ref").await?;
 
     let mut ref_video_default = true;
     let mut ref_audio_default = true;
@@ -225,8 +223,8 @@ async fn create_test_layout(job: &Job, config: &AppConfig, log_sender: mpsc::Sen
     }
 
     if let Some(sec_file) = &job.sec_file {
-        let sec_info = mkv_utils::get_stream_info(&runner, sec_file).await?;
-        let sec_extracted = mkv_utils::extract_tracks(&runner, Path::new(sec_file), &sec_info.tracks, &temp_dir, "sec").await?;
+        let sec_info = mkv_utils::get_stream_info(runner, sec_file).await?;
+        let sec_extracted = mkv_utils::extract_tracks(runner, Path::new(sec_file), &sec_info.tracks, temp_dir, "sec").await?;
         for extracted in sec_extracted {
             layout.push(TrackSelection {
                 source: "SEC".to_string(), extracted_path: extracted.path, is_default: false, is_forced: false,
@@ -236,7 +234,6 @@ async fn create_test_layout(job: &Job, config: &AppConfig, log_sender: mpsc::Sen
         }
     }
 
-    // We leave the temp dir for the main pipeline to use and clean up.
     Ok(layout)
 }
 
