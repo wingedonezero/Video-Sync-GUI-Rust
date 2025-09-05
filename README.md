@@ -1,2 +1,3 @@
-# Video-Sync-GUI-Rust
-Video-Sync-GUI-Rust
+# vsg_rust
+
+Placeholder repository structure.

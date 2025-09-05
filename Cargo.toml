@@ -1,0 +1,32 @@
+[package]
+name = "vsg_rust"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# GUI Toolkit
+iced = { version = "0.12", features = ["wgpu", "tokio"] }
+
+# Async Runtime
+tokio = { version = "1", features = ["full"] }
+
+# FFmpeg Bindings
+ffmpeg-next = "7.0"
+
+# Scientific Computing & Audio
+ndarray = "0.15"
+rustfft = "6.2"
+hound = "3.5"
+
+# Serialization for JSON
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# File Dialogs
+rfd = "0.14"
+
+# XML Parsing for Chapters
+xml-rs = "0.8"
+
+# Timestamps for unique directories
+chrono = "0.4"
