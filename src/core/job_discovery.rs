@@ -1,7 +1,7 @@
 // src/core/job_discovery.rs
 
-use std::path::{Path, PathBuf};
 use crate::core::pipeline::Job;
+use std::path::Path;
 
 const VALID_EXTENSIONS: &[&str] = &["mkv", "mp4", "m4v"];
 
@@ -50,11 +50,12 @@ pub fn discover_jobs(
             };
 
             if ref_file_path.is_file() {
+                // ADDED: Check for valid video extension
                 let extension = ref_file_path.extension()
                 .and_then(|s| s.to_str())
-                .unwrap_or("");
+                .unwrap_or("").to_lowercase();
 
-                if VALID_EXTENSIONS.contains(&extension) {
+                if VALID_EXTENSIONS.contains(&extension.as_str()) {
                     let file_name = ref_file_path.file_name().unwrap();
                     let mut has_match = false;
 

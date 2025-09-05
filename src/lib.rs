@@ -3,16 +3,15 @@
 pub mod core;
 pub mod ui;
 
-use iced::{executor, Application, Command, Element, Settings, Size, Theme, window::{self, Id}};
-use std::path::{Path, PathBuf};
-use tokio::fs;
+use iced::widget::container;
+use iced::{executor, Application, Command, Element, Length, Settings, Size, Theme};
+use std::path::PathBuf;
 
 use crate::core::config::AppConfig;
-use crate::core::pipeline::{Job, JobPipeline, TrackSelection};
 use crate::core::job_discovery;
-use crate::ui::manual_selection_dialog;
-use crate::core::{mkv_utils, process};
-
+use crate::core::pipeline::{Job, JobPipeline, TrackSelection};
+use crate::ui::manual_selection_dialog::{self, ManualSelection};
+use crate::ui::options_dialog::{self, OptionsDialog};
 
 pub fn run() -> iced::Result {
     VsgApp::run(Settings {
@@ -39,33 +38,49 @@ pub struct VsgApp {
     sec_delay_text: String,
     ter_delay_text: String,
     log_output: Vec<String>,
+    is_running: bool,
+
+    // State for managing modals
+    manual_selection: Option<ManualSelection>,
+    options_dialog: Option<OptionsDialog>,
 }
 
 #[derive(Debug, Clone)]
 pub enum Message {
+    // UI controls
     RefPathChanged(String),
     SecPathChanged(String),
     TerPathChanged(String),
     BrowseRef,
     BrowseSec,
     BrowseTer,
-    AutoApplyToggled(bool),
-    AutoApplyStrictToggled(bool),
-    ArchiveLogsToggled(bool),
-    AnalyzeOnlyClicked,
-    AnalyzeAndMergeClicked,
     RefFileSelected(Option<PathBuf>),
     SecFileSelected(Option<PathBuf>),
     TerFileSelected(Option<PathBuf>),
-    SettingsClicked,
+    AutoApplyToggled(bool),
+    AutoApplyStrictToggled(bool),
+    ArchiveLogsToggled(bool),
+
+    // Actions
+    StartJob(bool), // bool is for `and_merge`
     JobsDiscovered(Result<Vec<Job>, String>, bool),
-    JobFinished(Result<String, String>),
+
+    // Dialog Messages
+    OpenSettings,
+    OptionsMessage(options_dialog::DialogMessage),
+    ManualSelectionMessage(manual_selection_dialog::DialogMessage),
+
+    // Job Lifecycle
+    RunBatch(Vec<Job>, Vec<TrackSelection>),
+    JobLog(String),
+    JobProgress(f32),
+    BatchFinished(String),
 }
 
-impl iced::multi_window::Application for VsgApp {
+impl Application for VsgApp {
     type Executor = executor::Default;
     type Message = Message;
-    type Theme = Theme;
+    type Theme = Theme; // UPDATED
     type Flags = ();
 
     fn new(_flags: ()) -> (Self, Command<Message>) {
@@ -85,39 +100,95 @@ impl iced::multi_window::Application for VsgApp {
             ter_delay_text: "—".to_string(),
             log_output: vec!["Welcome to Video Sync & Merge!".to_string()],
             config,
+            is_running: false,
+            manual_selection: None,
+            options_dialog: None,
         };
         (app, Command::none())
     }
 
-    fn title(&self, _window: Id) -> String {
+    fn title(&self) -> String {
         String::from("Video Sync & Merge - Rust Edition")
     }
 
-    fn view(&self, _id: Id) -> Element<Message> {
-        ui::main_window::view(self)
+    fn view(&self) -> Element<Message> {
+        let main_content = ui::main_window::view(self);
+
+        let modal_overlay = if let Some(dialog_state) = &self.options_dialog {
+            Some(ui::options_dialog::view(dialog_state))
+        } else if let Some(dialog_state) = &self.manual_selection {
+            Some(ui::manual_selection_dialog::view(dialog_state).map(Message::ManualSelectionMessage))
+        } else {
+            None
+        };
+
+        if let Some(modal) = modal_overlay {
+            modal
+        } else {
+            main_content
+        }
     }
 
     fn update(&mut self, message: Message) -> Command<Message> {
         match message {
+            // --- UI Controls ---
             Message::RefPathChanged(path) => self.ref_path = path,
             Message::SecPathChanged(path) => self.sec_path = path,
             Message::TerPathChanged(path) => self.ter_path = path,
-
-            Message::BrowseRef => return Command::perform(open_file_or_dir(), Message::RefFileSelected),
-            Message::BrowseSec => return Command::perform(open_file_or_dir(), Message::SecFileSelected),
-            Message::BrowseTer => return Command::perform(open_file_or_dir(), Message::TerFileSelected),
-
             Message::RefFileSelected(Some(path)) => self.ref_path = path.to_string_lossy().into_owned(),
             Message::SecFileSelected(Some(path)) => self.sec_path = path.to_string_lossy().into_owned(),
             Message::TerFileSelected(Some(path)) => self.ter_path = path.to_string_lossy().into_owned(),
-
+            Message::BrowseRef => return Command::perform(open_file_or_dir(), Message::RefFileSelected),
+            Message::BrowseSec => return Command::perform(open_file_or_dir(), Message::SecFileSelected),
+            Message::BrowseTer => return Command::perform(open_file_or_dir(), Message::TerFileSelected),
             Message::AutoApplyToggled(val) => self.auto_apply_layout = val,
             Message::AutoApplyStrictToggled(val) => self.auto_apply_strict = val,
             Message::ArchiveLogsToggled(val) => self.archive_logs = val,
 
-            Message::AnalyzeOnlyClicked | Message::AnalyzeAndMergeClicked => {
-                let and_merge = matches!(message, Message::AnalyzeAndMergeClicked);
+            // --- Dialog Triggers & Handling ---
+            Message::OpenSettings => {
+                self.options_dialog = Some(OptionsDialog::new(self.config.clone()));
+            }
+            Message::OptionsMessage(msg) => {
+                if let Some(dialog) = &mut self.options_dialog {
+                    match msg {
+                        options_dialog::DialogMessage::Save => {
+                            self.config = dialog.pending_config.clone();
+                            self.config.save();
+                            self.options_dialog = None;
+                        },
+                        options_dialog::DialogMessage::Cancel => {
+                            self.options_dialog = None;
+                        },
+                        _ => dialog.update(msg),
+                    }
+                }
+            }
+            Message::ManualSelectionMessage(dialog_msg) => {
+                if let Some(dialog_state) = &mut self.manual_selection {
+                    match dialog_state.update(dialog_msg) {
+                        Some(manual_selection_dialog::DialogResult::Ok(layout)) => {
+                            self.manual_selection = None;
+                            self.status_text = format!("Layout received with {} tracks. Ready to run.", layout.len());
+                            // TODO: Actually start the batch run here
+                        },
+                        Some(manual_selection_dialog::DialogResult::Cancel) => {
+                            self.manual_selection = None;
+                            self.status_text = "Ready".to_string();
+                            self.is_running = false;
+                        },
+                        None => {} // Dialog is still open
+                    }
+                }
+            }
+
+            // --- Job Lifecycle ---
+            Message::StartJob(and_merge) => {
+                if self.is_running { return Command::none(); }
+                self.is_running = true;
                 self.status_text = "Discovering jobs...".to_string();
+                self.log_output.clear();
+
                 let ref_path = self.ref_path.clone();
                 let sec_path = self.sec_path.clone();
                 let ter_path = self.ter_path.clone();
@@ -130,116 +201,37 @@ impl iced::multi_window::Application for VsgApp {
             Message::JobsDiscovered(Ok(jobs), and_merge) => {
                 if jobs.is_empty() {
                     self.status_text = "No matching jobs found.".to_string();
-                } else if and_merge {
-                    self.status_text = format!("Found {} job(s). Opening selection dialog...", jobs.len());
-                    let first_job = jobs.into_iter().next().unwrap();
-                    return window::spawn(
-                        Id::new("manual_selection"),
-                                         window::Settings { size: Size::new(1000.0, 600.0), ..Default::default() },
-                                         move |_id| manual_selection_dialog::ManualSelection::new(first_job),
-                    );
-                } else {
-                    self.status_text = format!("Found {} job(s). Running analysis on first one...", jobs.len());
-                    self.log_output.push("INFO: Analysis-only job started.".to_string());
-                    let first_job = jobs.into_iter().next().unwrap();
-                    let config = self.config.clone();
-                    return Command::perform(run_job_task(first_job, config, and_merge), Message::JobFinished);
+                    self.is_running = false;
+                    return Command::none();
+                }
+
+                self.status_text = format!("Found {} job(s).", jobs.len());
+                if and_merge {
+                    let first_job = jobs[0].clone();
+                    self.manual_selection = Some(ManualSelection::new(first_job));
+                    return self.manual_selection.as_mut().unwrap().on_load();
                 }
             }
+
             Message::JobsDiscovered(Err(e), _) => {
                 self.status_text = format!("Error: {}", e);
+                self.is_running = false;
             }
 
-            Message::SettingsClicked => {
-                self.log_output.push("EVENT: Settings button clicked.".to_string());
-            }
-
-            Message::JobFinished(Ok(result)) => {
-                self.status_text = "Job Finished Successfully".to_string();
-                self.log_output.push("SUCCESS: Job finished.".to_string());
-                self.log_output.push(result);
-            }
-            Message::JobFinished(Err(error)) => {
-                self.status_text = "Job Failed".to_string();
-                self.log_output.push(format!("ERROR: {}", error));
-            }
             _ => {}
         }
         Command::none()
     }
 
     fn theme(&self) -> Self::Theme {
-        Theme::Oxocarbon
+        Theme::Oxocarbon // UPDATED
     }
-}
-
-async fn run_job_task(job: Job, config: AppConfig, and_merge: bool) -> Result<String, String> {
-    if !Path::new(&job.ref_file).exists() {
-        return Err("Reference file path is empty or does not exist.".to_string());
-    }
-    let (tx, mut rx) = tokio::sync::mpsc::channel(100);
-    let log_clone = tx.clone();
-    tokio::spawn(async move { while let Some(log) = rx.recv().await { println!("[LOG] {}", log); }});
-
-    // Create a temporary directory for the placeholder layout's extracted files
-    let temp_dir = PathBuf::from(&config.temp_root).join(format!("layout_test_{}", chrono::Utc::now().timestamp()));
-    fs::create_dir_all(&temp_dir).await.map_err(|e|e.to_string())?;
-
-    let runner = process::CommandRunner::new(config.clone(), log_clone);
-    let mut placeholder_layout = create_test_layout(&job, &runner, &temp_dir).await?;
-
-    let pipeline = JobPipeline::new(config, tx);
-    let result = pipeline.run_job(&job, and_merge, &mut placeholder_layout).await;
-
-    fs::remove_dir_all(&temp_dir).await.ok();
-    result
-}
-
-// Helper to create a detailed placeholder layout for testing the full pipeline
-async fn create_test_layout(job: &Job, runner: &process::CommandRunner, temp_dir: &Path) -> Result<Vec<TrackSelection>, String> {
-    let mut layout = Vec::new();
-
-    let ref_info = mkv_utils::get_stream_info(runner, &job.ref_file).await?;
-    let ref_tracks_to_extract: Vec<_> = ref_info.tracks.iter().cloned().collect();
-    let ref_extracted = mkv_utils::extract_tracks(runner, Path::new(&job.ref_file), &ref_tracks_to_extract, temp_dir, "ref").await?;
-
-    let mut ref_video_default = true;
-    let mut ref_audio_default = true;
-    for extracted in ref_extracted {
-        let track_type = &extracted.original_track.r#type;
-        let mut is_default = false;
-        if track_type == "video" && ref_video_default {
-            is_default = true;
-            ref_video_default = false;
-        } else if track_type == "audio" && ref_audio_default {
-            is_default = true;
-            ref_audio_default = false;
-        }
-        layout.push(TrackSelection {
-            source: "REF".to_string(), extracted_path: extracted.path, is_default, is_forced: false,
-                    apply_track_name: true, convert_to_ass: false, rescale: false, size_multiplier: 1.0,
-                    original_track: extracted.original_track,
-        });
-    }
-
-    if let Some(sec_file) = &job.sec_file {
-        let sec_info = mkv_utils::get_stream_info(runner, sec_file).await?;
-        let sec_extracted = mkv_utils::extract_tracks(runner, Path::new(sec_file), &sec_info.tracks, temp_dir, "sec").await?;
-        for extracted in sec_extracted {
-            layout.push(TrackSelection {
-                source: "SEC".to_string(), extracted_path: extracted.path, is_default: false, is_forced: false,
-                        apply_track_name: true, convert_to_ass: false, rescale: false, size_multiplier: 1.0,
-                        original_track: extracted.original_track,
-            });
-        }
-    }
-
-    Ok(layout)
 }
 
 async fn open_file_or_dir() -> Option<PathBuf> {
     rfd::AsyncFileDialog::new()
     .set_title("Select a file or directory")
-    .pick_file().await
+    .pick_file()
+    .await
     .map(|h| h.path().to_path_buf())
 }

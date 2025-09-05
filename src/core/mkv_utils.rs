@@ -1,16 +1,12 @@
 // src/core/mkv_utils.rs
 
-use serde::Deserialize;
-use std::fs::File;
-use std::io::{self, BufReader, Write};
-use std::path::{Path, PathBuf};
-use std::str::from_utf8;
-use xml::common::XmlVersion;
-use xml::reader::{EventReader, XmlEvent};
-use xml::writer::{EmitterConfig, EventWriter, XmlEvent as WriteXmlEvent};
-
 use crate::core::config::AppConfig;
 use crate::core::process::CommandRunner;
+use serde::Deserialize;
+use std::path::{Path, PathBuf};
+use tokio::fs;
+use xml::reader::{EventReader, XmlEvent};
+use xml::writer::{EmitterConfig, XmlEvent as WriteXmlEvent};
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct TrackProperties {
@@ -246,7 +242,7 @@ pub async fn process_chapters(runner: &CommandRunner, ref_file: &str, temp_dir: 
         None
     };
 
-    let modified_xml_bytes = transform_chapters(input_xml, shift_ms, config, keyframes.as_deref())?;
+    let modified_xml_bytes = transform_chapters(runner, input_xml, shift_ms, config, keyframes.as_deref()).await?;
 
     let out_path = temp_dir.join(format!("{}_chapters_processed.xml", Path::new(ref_file).file_stem().unwrap().to_string_lossy()));
     fs::write(&out_path, &modified_xml_bytes).await.map_err(|e| e.to_string())?;
@@ -255,106 +251,217 @@ pub async fn process_chapters(runner: &CommandRunner, ref_file: &str, temp_dir: 
     Ok(Some(out_path))
 }
 
-// **REWRITTEN FUNCTION**
-fn transform_chapters(xml_content: &str, shift_ms: i64, config: &AppConfig, keyframes: Option<&[u64]>) -> Result<Vec<u8>, String> {
-    let parser = EventReader::new(xml_content.as_bytes());
-    let mut buffer: Vec<u8> = Vec::new();
-    let mut writer = EmitterConfig::new()
-    .perform_indent(true)
-    .create_writer(&mut buffer);
 
+#[derive(Debug, Clone)]
+struct ChapterAtom {
+    start_ns: u64,
+    end_ns: Option<u64>,
+    original_events: Vec<XmlEvent>,
+}
+
+async fn transform_chapters(runner: &CommandRunner, xml_content: &str, shift_ms: i64, config: &AppConfig, keyframes: Option<&[u64]>) -> Result<Vec<u8>, String> {
+    let mut atoms = parse_chapters_to_atoms(xml_content)?;
+
+    // === Pass 2: Manipulate the intermediate representation ===
+    atoms.sort_by_key(|a| a.start_ns);
     let shift_ns = shift_ms * 1_000_000;
-    let mut chapter_counter = 0;
 
-    let mut in_atom = false;
-    let mut in_display = false;
-    let mut skip_display_content = false;
+    for atom in atoms.iter_mut() {
+        // Apply shift
+        atom.start_ns = atom.start_ns.saturating_add_signed(shift_ns);
+        atom.end_ns = atom.end_ns.map(|ns| ns.saturating_add_signed(shift_ns));
 
-    for event in parser {
-        let mut e = event.map_err(|e| e.to_string())?;
-
-        match &mut e {
-            XmlEvent::StartElement { name, .. } if name.local_name == "ChapterAtom" => {
-                in_atom = true;
-                chapter_counter += 1;
-            },
-            XmlEvent::EndElement { name, .. } if name.local_name == "ChapterAtom" => {
-                in_atom = false;
-            },
-            XmlEvent::StartElement { name, .. } if in_atom && name.local_name == "ChapterDisplay" => {
-                in_display = true;
-                if config.rename_chapters {
-                    skip_display_content = true;
-                }
-            },
-            XmlEvent::EndElement { name, .. } if in_atom && name.local_name == "ChapterDisplay" => {
-                if config.rename_chapters {
-                    let name_str = format!("Chapter {:02}", chapter_counter);
-                    writer.write(WriteXmlEvent::start_element("ChapterString").borrow()).map_err(|e| e.to_string())?;
-                    writer.write(WriteXmlEvent::characters(&name_str)).map_err(|e| e.to_string())?;
-                    writer.write(WriteXmlEvent::end_element()).map_err(|e| e.to_string())?;
-
-                    writer.write(WriteXmlEvent::start_element("ChapterLanguage").borrow()).map_err(|e| e.to_string())?;
-                    writer.write(WriteXmlEvent::characters("und")).map_err(|e| e.to_string())?;
-                    writer.write(WriteXmlEvent::end_element()).map_err(|e| e.to_string())?;
-                }
-                skip_display_content = false;
-                in_display = false;
-            },
-            XmlEvent::Characters(chars) if in_atom && (e.is_start_of_text()) => {
-                if let Some(parent_name) = e.as_start_element().map(|s| &s.name.local_name) {
-                    if parent_name == "ChapterTimeStart" || parent_name == "ChapterTimeEnd" {
-                        if let Ok(original_ns) = parse_time_ns(chars) {
-                            let shifted_ns = original_ns.saturating_add_signed(shift_ns);
-                            let final_ns = if let Some(kf) = keyframes {
-                                let threshold_ns = (config.snap_threshold_ms as u64) * 1_000_000;
-                                find_snap_candidate(shifted_ns, kf, &config.snap_mode, threshold_ns)
-                            } else {
-                                shifted_ns
-                            };
-                            *chars = format_time_ns(final_ns);
-                        }
-                    }
-                }
-            },
-            _ => {}
-        }
-
-        if in_display && skip_display_content {
-            if let XmlEvent::StartElement { .. } = e { }
-            else if let XmlEvent::EndElement { .. } = e { }
-            else { continue; }
-        }
-
-        if let Some(event_to_write) = e.as_writer_event() {
-            writer.write(event_to_write).map_err(|e| e.to_string())?;
+        // Apply snapping
+        if let Some(kf) = keyframes {
+            let threshold_ns = (config.snap_threshold_ms as u64) * 1_000_000;
+            atom.start_ns = find_snap_candidate(atom.start_ns, kf, &config.snap_mode, threshold_ns);
+            if !config.snap_starts_only {
+                atom.end_ns = atom.end_ns.map(|ns| find_snap_candidate(ns, kf, &config.snap_mode, threshold_ns));
+            }
         }
     }
-    // Note: This rewritten logic doesn't yet include the end-time normalization step for brevity,
-    // but it correctly preserves the XML structure, which was the critical flaw.
+
+    // Apply end time normalization
+    let mut fixed_end_times = 0;
+    for i in 0..atoms.len() {
+        let next_start_ns = if i + 1 < atoms.len() { Some(atoms[i+1].start_ns) } else { None };
+        let start_ns = atoms[i].start_ns;
+
+        let mut desired_end_ns = atoms[i].end_ns.unwrap_or(start_ns + 1_000_000_000); // Default 1s duration
+        if let Some(next_start) = next_start_ns {
+            desired_end_ns = desired_end_ns.min(next_start);
+        }
+        desired_end_ns = desired_end_ns.max(start_ns + 1); // Ensure end is after start
+
+        if atoms[i].end_ns != Some(desired_end_ns) {
+            atoms[i].end_ns = Some(desired_end_ns);
+            fixed_end_times += 1;
+        }
+    }
+    if fixed_end_times > 0 {
+        runner.send_log(&format!("[Chapters] Normalized {} chapter end times.", fixed_end_times)).await;
+    }
+
+
+    // === Pass 3: Rebuild the XML from the modified data ===
+    rebuild_xml_from_atoms(atoms, config)
+}
+
+fn parse_chapters_to_atoms(xml_content: &str) -> Result<Vec<ChapterAtom>, String> {
+    let mut parser = EventReader::from_str(xml_content);
+    let mut atoms = Vec::new();
+    let mut top_level_events = Vec::new();
+
+    // Find the start of the first ChapterAtom
+    loop {
+        match parser.next() {
+            Ok(XmlEvent::StartElement { name, .. }) if name.local_name == "ChapterAtom" => {
+                break; // Found it
+            }
+            Ok(XmlEvent::EndDocument) => return Ok(atoms), // No chapters
+            Err(e) => return Err(e.to_string()),
+            _ => {}
+        }
+    }
+
+    // Now we are positioned at the first <ChapterAtom>
+    loop {
+        let mut current_atom_events = Vec::new();
+        let mut current_start = 0;
+        let mut current_end = None;
+        let mut depth = 1; // Start inside the ChapterAtom
+        current_atom_events.push(XmlEvent::StartElement { name: "ChapterAtom".into(), attributes: vec![], namespace: Default::default() });
+
+        loop {
+            let event = parser.next().map_err(|e| e.to_string())?;
+            match &event {
+                XmlEvent::StartElement { name, .. } => {
+                    depth += 1;
+                    match name.local_name.as_str() {
+                        "ChapterTimeStart" => {
+                            if let Ok(XmlEvent::Characters(chars)) = parser.next().map_err(|e|e.to_string()) {
+                                current_start = parse_time_ns(&chars).unwrap_or(0);
+                            }
+                            parser.next().ok(); // consume end element
+                            depth -=1;
+                        },
+                        "ChapterTimeEnd" => {
+                            if let Ok(XmlEvent::Characters(chars)) = parser.next().map_err(|e|e.to_string()) {
+                                current_end = parse_time_ns(&chars);
+                            }
+                            parser.next().ok(); // consume end element
+                            depth -=1;
+                        }
+                        _ => current_atom_events.push(event.clone())
+                    }
+                },
+                XmlEvent::EndElement { name, .. } => {
+                    depth -= 1;
+                    if depth == 0 && name.local_name == "ChapterAtom" {
+                        current_atom_events.push(event.clone());
+                        break;
+                    }
+                    current_atom_events.push(event.clone());
+                },
+                XmlEvent::EndDocument => break,
+                _ => current_atom_events.push(event.clone())
+            }
+        }
+        atoms.push(ChapterAtom { start_ns: current_start, end_ns: current_end, original_events: current_atom_events });
+
+        if let Ok(XmlEvent::EndDocument) = parser.peek() {
+            break;
+        }
+    }
+
+    Ok(atoms)
+}
+
+fn rebuild_xml_from_atoms(atoms: Vec<ChapterAtom>, config: &AppConfig) -> Result<Vec<u8>, String> {
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut writer = EmitterConfig::new().perform_indent(true).create_writer(&mut buffer);
+
+    writer.write(WriteXmlEvent::start_element("Chapters")).map_err(|e|e.to_string())?;
+    writer.write(WriteXmlEvent::start_element("EditionEntry")).map_err(|e|e.to_string())?;
+
+    for (i, atom) in atoms.iter().enumerate() {
+        writer.write(WriteXmlEvent::start_element("ChapterAtom")).map_err(|e|e.to_string())?;
+
+        // Write required time elements
+        writer.write(WriteXmlEvent::start_element("ChapterTimeStart")).map_err(|e|e.to_string())?;
+        writer.write(WriteXmlEvent::characters(&format_time_ns(atom.start_ns))).map_err(|e|e.to_string())?;
+        writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
+
+        if let Some(end_ns) = atom.end_ns {
+            writer.write(WriteXmlEvent::start_element("ChapterTimeEnd")).map_err(|e|e.to_string())?;
+            writer.write(WriteXmlEvent::characters(&format_time_ns(end_ns))).map_err(|e|e.to_string())?;
+            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
+        }
+
+        // Write the other original events, substituting ChapterDisplay if needed
+        let mut display_handled = false;
+        for event in &atom.original_events {
+            if let Some(we) = event.as_writer_event() {
+                if let xml::writer::XmlEvent::StartElement { name, .. } = we {
+                    if name.local_name == "ChapterDisplay" {
+                        display_handled = true;
+                        if config.rename_chapters {
+                            writer.write(WriteXmlEvent::start_element("ChapterDisplay")).map_err(|e|e.to_string())?;
+                            let name_str = format!("Chapter {:02}", i + 1);
+                            writer.write(WriteXmlEvent::start_element("ChapterString")).map_err(|e|e.to_string())?;
+                            writer.write(WriteXmlEvent::characters(&name_str)).map_err(|e|e.to_string())?;
+                            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
+                            writer.write(WriteXmlEvent::start_element("ChapterLanguage")).map_err(|e|e.to_string())?;
+                            writer.write(WriteXmlEvent::characters("und")).map_err(|e|e.to_string())?;
+                            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
+                            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // ChapterDisplay
+                        } else {
+                            writer.write(we).map_err(|e|e.to_string())?;
+                        }
+                    } else if name.local_name != "ChapterAtom" {
+                        writer.write(we).map_err(|e|e.to_string())?;
+                    }
+                } else {
+                    writer.write(we).map_err(|e|e.to_string())?;
+                }
+            }
+        }
+
+        if !display_handled && config.rename_chapters {
+            writer.write(WriteXmlEvent::start_element("ChapterDisplay")).map_err(|e|e.to_string())?;
+            let name_str = format!("Chapter {:02}", i + 1);
+            writer.write(WriteXmlEvent::start_element("ChapterString")).map_err(|e|e.to_string())?;
+            writer.write(WriteXmlEvent::characters(&name_str)).map_err(|e|e.to_string())?;
+            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
+            writer.write(WriteXmlEvent::start_element("ChapterLanguage")).map_err(|e|e.to_string())?;
+            writer.write(WriteXmlEvent::characters("und")).map_err(|e|e.to_string())?;
+            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
+            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // ChapterDisplay
+        }
+
+        writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // ChapterAtom
+    }
+
+    writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // EditionEntry
+    writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // Chapters
     Ok(buffer)
 }
 
 fn find_snap_candidate(ts_ns: u64, keyframes: &[u64], mode: &str, threshold_ns: u64) -> u64 {
     let search_result = keyframes.binary_search(&ts_ns);
     let candidate = match search_result {
-        Ok(_) => ts_ns, // Already on a keyframe
+        Ok(_) => ts_ns,
         Err(i) => {
-            let prev_kf = if i > 0 { Some(keyframes[i-1]) } else { None };
+            let prev_kf = if i > 0 { Some(keyframes[i - 1]) } else { None };
             let next_kf = keyframes.get(i);
-
             match (prev_kf, next_kf) {
-                (Some(p), Some(n)) => {
-                    if mode == "previous" { p }
-                    else { if (ts_ns - p) < (*n - ts_ns) { p } else { *n } }
-                },
+                (Some(p), Some(&n)) => if mode == "previous" { p } else if ts_ns - p < n - ts_ns { p } else { n },
                 (Some(p), None) => p,
-                (None, Some(n)) => *n,
+                (None, Some(&n)) => n,
                 (None, None) => ts_ns,
             }
         }
     };
-
     if (candidate as i64 - ts_ns as i64).abs() as u64 <= threshold_ns {
         candidate
     } else {

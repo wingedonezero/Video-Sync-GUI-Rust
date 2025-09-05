@@ -1,7 +1,7 @@
 // src/ui/main_window.rs
 
 use iced::widget::{button, checkbox, column, container, progress_bar, row, scrollable, text, text_input};
-use iced::{Alignment, Element, Font, Length, Theme};
+use iced::{Alignment, Element, Font, Length};
 use crate::{Message, VsgApp};
 
 // Helper functions are no longer generic, they use the default Theme
@@ -54,8 +54,10 @@ pub fn view(state: &VsgApp) -> Element<Message> {
 
     let actions_group = group_box("Actions", column![
         row![
-            button("Analyze Only").on_press(Message::AnalyzeOnlyClicked),
-                                  button("Analyze & Merge").on_press(Message::AnalyzeAndMergeClicked),
+            // UPDATED LINE
+            button("Analyze Only").on_press(Message::StartJob(false)),
+                                  // UPDATED LINE
+                                  button("Analyze & Merge").on_press(Message::StartJob(true)),
         ].spacing(10),
                                   checkbox("Archive logs on batch completion", state.archive_logs)
                                   .on_toggle(Message::ArchiveLogsToggled),

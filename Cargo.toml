@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 # GUI Toolkit
 iced = { version = "0.12", features = ["wgpu", "tokio"] }
+iced_aw = "0.8" # ADDED for extra widgets like tabs
 
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
@@ -30,3 +31,6 @@ xml-rs = "0.8"
 
 # Timestamps for unique directories
 chrono = "0.4"
+
+# Regular Expressions
+regex = "1"

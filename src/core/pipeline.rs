@@ -73,8 +73,8 @@ impl JobPipeline {
                 _ => { // Audio Correlation
                     let ref_lang = if ref_lang_conf.is_empty() { None } else { Some(ref_lang_conf) };
                     let target_lang = if target_lang_conf.is_empty() { None } else { Some(target_lang_conf) };
-                    let results = analysis::run_audio_correlation(&runner, &job.ref_file, target_file, &temp_dir, ref_lang, target_lang).await?;
-                    Ok(analysis::best_from_results(&results).map(|b| b.delay_ms).unwrap_or(0))
+                    let results = analysis::run_audio_correlation(&runner, &self.config, &job.ref_file, target_file, &temp_dir, ref_lang, target_lang).await?;
+                    Ok(analysis::best_from_results(&results, self.config.min_match_pct).map(|b| b.delay_ms).unwrap_or(0))
                 }
             }
         };
@@ -93,6 +93,7 @@ impl JobPipeline {
             Some(delay)
         } else { None };
 
+
         let delay_sec_val = delay_sec.unwrap_or(0);
         let delay_ter_val = delay_ter.unwrap_or(0);
 
@@ -104,13 +105,12 @@ impl JobPipeline {
             ));
         }
 
-        // --- Merge Planning ---
+        // --- Merge Planning & Extraction ---
         runner.send_log("--- Merge Planning Phase ---").await;
         let min_delay = 0i64.min(delay_sec_val).min(delay_ter_val);
         let global_shift = if min_delay < 0 { -min_delay } else { 0 };
         runner.send_log(&format!("[Delay] Applying lossless global shift: +{} ms", global_shift)).await;
 
-        // --- Extraction Phase ---
         runner.send_log("--- Extraction Phase ---").await;
         let mut final_layout: Vec<TrackSelection> = Vec::new();
 
@@ -240,7 +240,7 @@ impl JobPipeline {
 
             if self.config.apply_dialog_norm_gain {
                 if let Some(codec) = &track.properties.codec_id {
-                    if codec.contains("AC3") { // Simplified check for E-AC3 as well
+                    if codec.contains("AC3") { // Covers AC3 and E-AC3
                         tokens.extend_from_slice(&["--remove-dialog-normalization-gain".to_string(), format!("{}:1", track_id_in_file)]);
                     }
                 }

@@ -126,8 +126,11 @@ fn find_audio_delay(ref_wav: &Path, sec_wav: &Path) -> Result<(i64, f64), String
         }
     }
 
-    // Convert from FFT's circular correlation index to a linear lag
-    let lag_samples_linear = lag_samples - (sec_sig.len() as i64 - 1);
+    let lag_samples_linear = if lag_samples >= (n_fft as i64 / 2) {
+        lag_samples - n_fft as i64
+    } else {
+        lag_samples
+    };
 
     let delay_s = -(lag_samples_linear as f64) / sample_rate;
     let delay_ms = (delay_s * 1000.0).round() as i64;
@@ -146,6 +149,7 @@ fn find_audio_delay(ref_wav: &Path, sec_wav: &Path) -> Result<(i64, f64), String
 /// Orchestrates the audio correlation workflow by analyzing chunks.
 pub async fn run_audio_correlation(
     runner: &CommandRunner,
+    config: &AppConfig,
     ref_file: &str,
     target_file: &str,
     temp_dir: &Path,
@@ -167,8 +171,8 @@ pub async fn run_audio_correlation(
     runner.send_log(&format!("[Analysis] Selected streams for correlation: REF(idx={}), Target(idx={})", ref_audio_idx, sec_audio_idx)).await;
 
     let mut results = Vec::new();
-    let chunk_duration = 15.0;
-    let num_chunks = 10;
+    let chunk_duration = config.scan_chunk_duration as f64;
+    let num_chunks = config.scan_chunk_count;
 
     let scan_range = (total_duration_s * 0.8).max(0.0);
     let start_offset = total_duration_s * 0.1;
@@ -195,7 +199,7 @@ pub async fn run_audio_correlation(
 
         if ref_res.is_ok() && sec_res.is_ok() {
             if let Ok((delay_ms, match_pct)) = find_audio_delay(&ref_wav, &sec_wav) {
-                runner.send_log(&format!("Chunk @{}s -> Delay {:+} ms (Match {:.2f}%)", start_time_s.round() as i64, delay_ms, match_pct)).await;
+                runner.send_log(&format!("Chunk @{}s -> Delay {:+} ms (Match {:.2}%)", start_time_s.round() as i64, delay_ms, match_pct)).await;
                 results.push(CorrelationResult {
                     delay_ms,
                     match_pct,
@@ -212,31 +216,31 @@ pub async fn run_audio_correlation(
 }
 
 /// Finds the most consistent and strongest delay from a list of chunk results.
-pub fn best_from_results(results: &[CorrelationResult]) -> Option<CorrelationResult> {
+pub fn best_from_results(results: &[CorrelationResult], min_match_pct: f64) -> Option<CorrelationResult> {
     if results.is_empty() {
         return None;
     }
 
     let mut counts = HashMap::new();
-    for r in results {
-        if r.match_pct > 5.0 {
-            // min_match_pct
-            *counts.entry(r.delay_ms).or_insert(0) += 1;
-        }
+    let valid_results: Vec<&CorrelationResult> = results.iter().filter(|r| r.match_pct > min_match_pct).collect();
+
+    if valid_results.is_empty() {
+        return None;
     }
 
-    if counts.is_empty() {
-        return None;
+    for r in &valid_results {
+        *counts.entry(r.delay_ms).or_insert(0) += 1;
     }
 
     let max_freq = *counts.values().max().unwrap_or(&0);
 
-    results
-    .iter()
+    valid_results
+    .into_iter()
     .filter(|r| counts.get(&r.delay_ms).unwrap_or(&0) == &max_freq)
     .max_by(|a, b| a.match_pct.partial_cmp(&b.match_pct).unwrap())
     .cloned()
 }
+
 
 /// Runs the videodiff tool and parses its final result line.
 pub async fn run_videodiff(
