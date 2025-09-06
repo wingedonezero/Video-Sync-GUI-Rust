@@ -1,30 +1,36 @@
 [package]
-name = "vsg_rust"
+name = "video-sync-rust"
 version = "0.1.0"
 edition = "2021"
 
+[[bin]]
+name = "vsg-cli"
+path = "src/main.rs"
+
+[lib]
+name = "vsg_core"
+path = "src/lib.rs"
+
 [dependencies]
-# GUI Toolkit
-iced = { version = "0.13.1", features = ["wgpu", "tokio"] }
-iced_aw = "0.12.2"
+# GUI Toolkit (for later)
+# iced = { version = "0.13.1", features = ["wgpu", "tokio"] }
+# iced_aw = "0.12.2"
 
 # Async Runtime
 tokio = { version = "1", features = ["full"] }
 
-# FFmpeg Bindings
-ffmpeg-next = "7.0"
+# FFmpeg Bindings (using std::process for now to be faithful to python)
+# ffmpeg-next = "7.0"
 
 # Scientific Computing & Audio
 ndarray = "0.15"
 rustfft = "6.2"
 hound = "3.5"
+num-complex = "0.4" # <-- ADD THIS
 
 # Serialization for JSON
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-
-# File Dialogs
-rfd = "0.14"
 
 # XML Parsing for Chapters
 xml-rs = "0.8"
@@ -34,3 +40,9 @@ chrono = "0.4"
 
 # Regular Expressions
 regex = "1"
+
+# Command-line Argument Parser
+clap = { version = "4.5", features = ["derive"] }
+
+# Simplified Error Handling
+anyhow = "1.0"
