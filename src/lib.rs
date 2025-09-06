@@ -1,9 +1,14 @@
 // src/lib.rs
-
-pub mod config;
-pub mod process;
-pub mod analysis;
-pub mod subtitle_utils;
-pub mod mkv_utils;
-pub mod job_discovery;
-pub mod pipeline;
+pub mod core {
+    pub mod command_runner;
+    pub mod config;
+    pub mod mkv_utils;
+    pub mod subtitle_utils;
+    pub mod analysis;
+    pub mod job_discovery;
+    pub mod pipeline;          // <-- new
+}
+pub mod types {
+    pub mod errors;
+    pub mod tracks;
+}

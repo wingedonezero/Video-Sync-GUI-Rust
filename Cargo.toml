@@ -1,48 +1,43 @@
 [package]
-name = "video-sync-rust"
+name = "vsg"
 version = "0.1.0"
 edition = "2021"
 
-[[bin]]
-name = "vsg-cli"
-path = "src/main.rs"
-
-[lib]
-name = "vsg_core"
-path = "src/lib.rs"
-
 [dependencies]
-# GUI Toolkit (for later)
-# iced = { version = "0.13.1", features = ["wgpu", "tokio"] }
-# iced_aw = "0.12.2"
+# GUI
+iced = { version = "0.13.1", features = ["multi-window"] }
+iced_aw = { version = "0.12.2", default-features = false, features = ["modal", "card", "tabs"] }
 
-# Async Runtime
-tokio = { version = "1", features = ["full"] }
-
-# FFmpeg Bindings (using std::process for now to be faithful to python)
-# ffmpeg-next = "7.0"
-
-# Scientific Computing & Audio
-ndarray = "0.15"
-rustfft = "6.2"
-hound = "3.5"
-num-complex = "0.4" # <-- ADD THIS
-
-# Serialization for JSON
+# Serialization / config
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
-# XML Parsing for Chapters
-xml-rs = "0.8"
+# Process / system
+tokio = { version = "1", features = ["process", "rt-multi-thread", "macros", "io-util"] }
+which = "4.4"
 
-# Timestamps for unique directories
-chrono = "0.4"
+# Audio / analysis
+hound = "3.5"
+rubato = "0.12"
+realfft = "3.3"
+ndarray = "0.15"
+libc = "0.2"
 
-# Regular Expressions
+# Video / mkv utils
 regex = "1"
+quick-xml = "0.31"
+tempfile = "3.10"
 
-# Command-line Argument Parser
-clap = { version = "4.5", features = ["derive"] }
-
-# Simplified Error Handling
+# General utilities
 anyhow = "1.0"
+thiserror = "1.0"
+log = "0.4"
+env_logger = "0.11"
+
+# For collections / signatures
+indexmap = "2.2"
+
+# Native dialogs + zip + worker channel
+rfd = "0.14"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+crossbeam-channel = "0.5"
