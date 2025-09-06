@@ -1,8 +1,6 @@
 // src/ui/manual_selection_dialog.rs
 
-use iced::widget::{
-    button, checkbox, column, container, row, scrollable, text, text_input, Space,
-};
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Element, Length, Task};
 
 use crate::core::mkv_utils::{self, Track};
@@ -34,9 +32,9 @@ pub enum DialogMessage {
     TracksInfoReady(Result<(Vec<Track>, Vec<Track>, Vec<Track>), String>),
 
     // adding/removing/reordering
-    AddTrack(&'static str, Track),     // source tag "REF"/"SEC"/"TER"
+    AddTrack(&'static str, Track), // source tag "REF"/"SEC"/"TER"
     RemoveTrack(usize),
-    MoveTrack(usize, i8),              // index, -1 up / +1 down
+    MoveTrack(usize, i8), // index, -1 up / +1 down
 
     // per-item toggles
     ToggleDefault(usize),
@@ -114,7 +112,6 @@ impl ManualSelection {
                 };
                 self.selected_tracks.push(selection);
                 self.size_inputs.push("1".to_string());
-                // keep single default per type if user toggles later
             }
 
             DialogMessage::RemoveTrack(index) => {
@@ -142,13 +139,17 @@ impl ManualSelection {
                 if let Some(sel) = self.selected_tracks.get(index).cloned() {
                     let ttype = sel.original_track.r#type.clone();
                     // unset all defaults of same type
-                    for s in self.selected_tracks.iter_mut().filter(|s| s.original_track.r#type == ttype) {
-                        s.is_default = false;
-                    }
-                    // set toggled item
-                    if let Some(s) = self.selected_tracks.get_mut(index) {
-                        s.is_default = true;
-                    }
+                    for s in self
+                        .selected_tracks
+                        .iter_mut()
+                        .filter(|s| s.original_track.r#type == ttype)
+                        {
+                            s.is_default = false;
+                        }
+                        // set toggled item
+                        if let Some(s) = self.selected_tracks.get_mut(index) {
+                            s.is_default = true;
+                        }
                 }
             }
 
@@ -223,7 +224,6 @@ impl ManualSelection {
 }
 
 fn enforce_single_default_per_type(list: &mut [TrackSelection]) {
-    // keep the first default encountered for a type; clear others
     use std::collections::HashSet;
     let mut seen: HashSet<&str> = HashSet::new();
     for i in 0..list.len() {
@@ -266,21 +266,13 @@ pub fn view(state: &ManualSelection) -> Element<DialogMessage> {
 
     let controls = row![
         text(if state.loaded { &state.status } else { "Loading…" }).width(Length::Fill),
-        button("OK").on_press(DialogMessage::OkClicked),
-        button("Cancel").on_press(DialogMessage::CancelClicked),
+        button(text("OK")).on_press(DialogMessage::OkClicked),
+        button(text("Cancel")).on_press(DialogMessage::CancelClicked),
     ]
     .spacing(10)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
-    container(
-        column![
-            header,
-            main_row,
-            controls,
-        ]
-        .spacing(12)
-        .padding(10),
-    )
+    container(column![header, main_row, controls].spacing(12).padding(10u16))
     .width(Length::Fixed(1100.0))
     .height(Length::Fixed(650.0))
     .into()
@@ -300,13 +292,14 @@ fn track_list_group<'a>(
             let is_disabled_video = tr.r#type == "video" && (source == "SEC" || source == "TER");
             let label = format!(
                 "[{}-{:}] ({}) {}{}",
-                                tr.r#type.chars().next().unwrap_or('U').to_ascii_uppercase(),
+                                tr.r#type
+                                .chars()
+                                .next()
+                                .unwrap_or('U')
+                                .to_ascii_uppercase(),
                                 tr.id,
                                 tr.properties.language.as_deref().unwrap_or("und"),
-                                tr.properties
-                                .codec_id
-                                .as_deref()
-                                .unwrap_or("N/A"),
+                                tr.properties.codec_id.as_deref().unwrap_or("N/A"),
                                 if tr
                                     .properties
                                     .track_name
@@ -314,16 +307,13 @@ fn track_list_group<'a>(
                                     .map(|s| !s.is_empty())
                                     .unwrap_or(false)
                                     {
-                                        format!(
-                                            "  '{}'",
-                                            tr.properties.track_name.as_deref().unwrap_or("")
-                                        )
+                                        format!("  '{}'", tr.properties.track_name.as_deref().unwrap_or(""))
                                     } else {
                                         "".to_string()
                                     }
             );
 
-            let mut btn = button(label).width(Length::Fill);
+            let mut btn = button(text(label)).width(Length::Fill);
             if !is_disabled_video {
                 btn = btn.on_press(DialogMessage::AddTrack(source, tr.clone()));
             }
@@ -331,20 +321,24 @@ fn track_list_group<'a>(
         }
     }
 
-    column![text(title).size(16), container(items).padding(6)]
+    column![text(title).size(16), container(items).padding(6u16)]
     .spacing(6)
     .into()
 }
 
-fn selected_track_row(
+fn selected_track_row<'a>(
     index: usize,
-    sel: &TrackSelection,
-    size_input_opt: Option<&String>,
-) -> Element<DialogMessage> {
+    sel: &'a TrackSelection,
+    size_input_opt: Option<&'a String>,
+) -> Element<'a, DialogMessage> {
     let badges = format!(
         "{}{}",
         if sel.is_default { "⭐ " } else { "" },
-            if sel.is_forced && sel.original_track.r#type == "subtitles" { "📌 " } else { "" }
+            if sel.is_forced && sel.original_track.r#type == "subtitles" {
+                "📌 "
+            } else {
+                ""
+            }
     );
 
     let info = text(format!(
@@ -371,54 +365,56 @@ fn selected_track_row(
     let size_str = size_input_opt.cloned().unwrap_or_else(|| "1".to_string());
     let size_row = row![
         text("Size:"),
-        button("-").on_press(DialogMessage::SizeDec(index)),
-        text_input("x", &size_str).on_input(move |s| DialogMessage::SizeChanged(index, s)).width(Length::Fixed(60.0)),
-        button("+").on_press(DialogMessage::SizeInc(index)),
+        button(text("-")).on_press(DialogMessage::SizeDec(index)),
+        text_input("x", &size_str)
+        .on_input(move |s| DialogMessage::SizeChanged(index, s))
+        .width(Length::Fixed(60.0)),
+        button(text("+")).on_press(DialogMessage::SizeInc(index)),
     ]
     .spacing(6)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
+
+    // For buttons that should look disabled when inapplicable, we simply omit on_press
+    let forced_btn = if is_subs {
+        button(text(if sel.is_forced { "Forced ✓" } else { "Forced" }))
+        .on_press(DialogMessage::ToggleForced(index))
+    } else {
+        button(text("Forced"))
+    };
+
+    let srt_to_ass_btn = if is_subs && extension_is_srt(&sel.original_track) {
+        button(text(if sel.convert_to_ass { "SRT→ASS ✓" } else { "SRT→ASS" }))
+        .on_press(DialogMessage::ToggleConvertToAss(index))
+    } else {
+        button(text("SRT→ASS"))
+    };
+
+    let rescale_btn = if is_subs {
+        button(text(if sel.rescale { "Rescale ✓" } else { "Rescale" }))
+        .on_press(DialogMessage::ToggleRescale(index))
+    } else {
+        button(text("Rescale"))
+    };
 
     let toggles_row = row![
-        button(if sel.is_default { "Default ✓" } else { "Default" })
+        button(text(if sel.is_default { "Default ✓" } else { "Default" }))
         .on_press(DialogMessage::ToggleDefault(index)),
-        button(if sel.apply_track_name { "Name ✓" } else { "Name" })
+        button(text(if sel.apply_track_name { "Name ✓" } else { "Name" }))
         .on_press(DialogMessage::ToggleApplyTrackName(index)),
-        if is_subs {
-            button(if sel.is_forced { "Forced ✓" } else { "Forced" })
-            .on_press(DialogMessage::ToggleForced(index))
-        } else {
-            // placeholder to keep spacing
-            button("Forced").on_press(DialogMessage::ToggleForced(index)).style(iced::theme::Button::Secondary)
-        },
-        if is_subs && extension_is_srt(&sel.original_track) {
-            button(if sel.convert_to_ass { "SRT→ASS ✓" } else { "SRT→ASS" })
-            .on_press(DialogMessage::ToggleConvertToAss(index))
-        } else {
-            button("SRT→ASS").on_press(DialogMessage::ToggleConvertToAss(index)).style(iced::theme::Button::Secondary)
-        },
-        if is_subs {
-            button(if sel.rescale { "Rescale ✓" } else { "Rescale" })
-            .on_press(DialogMessage::ToggleRescale(index))
-        } else {
-            button("Rescale").on_press(DialogMessage::ToggleRescale(index)).style(iced::theme::Button::Secondary)
-        },
-        Space::with_width(Length::Fill),
-        button("↑").on_press(DialogMessage::MoveTrack(index, -1)),
-        button("↓").on_press(DialogMessage::MoveTrack(index, 1)),
-        button("Remove").on_press(DialogMessage::RemoveTrack(index)),
+        forced_btn,
+            srt_to_ass_btn,
+            rescale_btn,
+            Space::with_width(Length::Fill),
+            button(text("↑")).on_press(DialogMessage::MoveTrack(index, -1)),
+            button(text("↓")).on_press(DialogMessage::MoveTrack(index, 1)),
+            button(text("Remove")).on_press(DialogMessage::RemoveTrack(index)),
     ]
     .spacing(6)
-    .align_items(Alignment::Center);
+    .align_y(Alignment::Center);
 
-    container(
-        column![
-            row![info].align_items(Alignment::Center),
-              size_row,
-              toggles_row,
-        ]
-        .spacing(6)
-        .padding(6),
-    )
+    container(column![row![info].align_y(Alignment::Center), size_row, toggles_row]
+    .spacing(6)
+    .padding(6u16))
     .into()
 }
 

@@ -45,7 +45,8 @@ impl CommandRunner {
         let mut last_progress = -1isize;
         let progress_step = self.config.log_progress_step as isize;
 
-        let mut tail_buffer: VecDeque<String> = VecDeque::with_capacity(self.config.log_error_tail as usize + 1);
+        let mut tail_buffer: VecDeque<String> =
+        VecDeque::with_capacity(self.config.log_error_tail as usize + 1);
 
         loop {
             tokio::select! {

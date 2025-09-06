@@ -117,7 +117,8 @@ fn find_audio_delay(ref_wav: &Path, sec_wav: &Path) -> Result<(i64, f64), String
     ifft.process(&mut ref_buf);
     let correlation: Array1<f64> = ref_buf.iter().map(|c| c.re / n_fft as f64).collect();
 
-    let mut max_corr = 0.0;
+    // FIX: specify concrete float type to avoid E0689 ambiguity
+    let mut max_corr: f64 = 0.0;
     let mut lag_samples = 0;
     for (i, &val) in correlation.iter().enumerate() {
         if val.abs() > max_corr.abs() {
@@ -168,7 +169,11 @@ pub async fn run_audio_correlation(
     .await?
     .unwrap_or(0);
 
-    runner.send_log(&format!("[Analysis] Selected streams for correlation: REF(idx={}), Target(idx={})", ref_audio_idx, sec_audio_idx)).await;
+    runner.send_log(&format!(
+        "[Analysis] Selected streams for correlation: REF(idx={}), Target(idx={})",
+                             ref_audio_idx, sec_audio_idx
+    ))
+    .await;
 
     let mut results = Vec::new();
     let chunk_duration = config.scan_chunk_duration as f64;
@@ -184,8 +189,14 @@ pub async fn run_audio_correlation(
         let ref_wav = temp_dir.join(format!("ref_chunk_{}.wav", i));
         let sec_wav = temp_dir.join(format!("sec_chunk_{}.wav", i));
 
-        let ref_task =
-        extract_audio_chunk(runner, ref_file, &ref_wav, start_time_s, chunk_duration, ref_audio_idx);
+        let ref_task = extract_audio_chunk(
+            runner,
+            ref_file,
+            &ref_wav,
+            start_time_s,
+            chunk_duration,
+            ref_audio_idx,
+        );
         let sec_task = extract_audio_chunk(
             runner,
             target_file,
@@ -199,7 +210,14 @@ pub async fn run_audio_correlation(
 
         if ref_res.is_ok() && sec_res.is_ok() {
             if let Ok((delay_ms, match_pct)) = find_audio_delay(&ref_wav, &sec_wav) {
-                runner.send_log(&format!("Chunk @{}s -> Delay {:+} ms (Match {:.2}%)", start_time_s.round() as i64, delay_ms, match_pct)).await;
+                runner
+                .send_log(&format!(
+                    "Chunk @{}s -> Delay {:+} ms (Match {:.2}%)",
+                                   start_time_s.round() as i64,
+                                   delay_ms,
+                                   match_pct
+                ))
+                .await;
                 results.push(CorrelationResult {
                     delay_ms,
                     match_pct,
@@ -216,13 +234,19 @@ pub async fn run_audio_correlation(
 }
 
 /// Finds the most consistent and strongest delay from a list of chunk results.
-pub fn best_from_results(results: &[CorrelationResult], min_match_pct: f64) -> Option<CorrelationResult> {
+pub fn best_from_results(
+    results: &[CorrelationResult],
+    min_match_pct: f64,
+) -> Option<CorrelationResult> {
     if results.is_empty() {
         return None;
     }
 
     let mut counts = HashMap::new();
-    let valid_results: Vec<&CorrelationResult> = results.iter().filter(|r| r.match_pct > min_match_pct).collect();
+    let valid_results: Vec<&CorrelationResult> = results
+    .iter()
+    .filter(|r| r.match_pct > min_match_pct)
+    .collect();
 
     if valid_results.is_empty() {
         return None;
@@ -240,7 +264,6 @@ pub fn best_from_results(results: &[CorrelationResult], min_match_pct: f64) -> O
     .max_by(|a, b| a.match_pct.partial_cmp(&b.match_pct).unwrap())
     .cloned()
 }
-
 
 /// Runs the videodiff tool and parses its final result line.
 pub async fn run_videodiff(
@@ -272,8 +295,7 @@ pub async fn run_videodiff(
     if let Some(line) = last_result_line {
         if let Some(caps) = re.captures(line) {
             let kind = caps.get(1).map_or("", |m| m.as_str());
-            let seconds =
-            f64::from_str(caps.get(2).map_or("0.0", |m| m.as_str())).unwrap_or(0.0);
+            let seconds = f64::from_str(caps.get(2).map_or("0.0", |m| m.as_str())).unwrap_or(0.0);
             let error_val =
             f64::from_str(caps.get(3).map_or("0.0", |m| m.as_str())).unwrap_or(0.0);
 
@@ -282,7 +304,12 @@ pub async fn run_videodiff(
                 delay_ms = -delay_ms;
             }
 
-            runner.send_log(&format!("[VideoDiff] Result -> kind={} seconds={:.3} error={:.2} => delay_ms={}", kind, seconds, error_val, delay_ms)).await;
+            runner
+            .send_log(&format!(
+                "[VideoDiff] Result -> kind={} seconds={:.3} error={:.2} => delay_ms={}",
+                kind, seconds, error_val, delay_ms
+            ))
+            .await;
 
             if error_val >= config.videodiff_error_min && error_val <= config.videodiff_error_max {
                 return Ok((delay_ms, error_val));

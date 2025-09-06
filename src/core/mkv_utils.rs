@@ -46,12 +46,16 @@ struct FfprobeOutput {
     packets: Vec<FfprobePacket>,
 }
 
-pub async fn get_stream_info(runner: &CommandRunner, file_path: &str) -> Result<MkvMergeIdentify, String> {
+pub async fn get_stream_info(
+    runner: &CommandRunner,
+    file_path: &str,
+) -> Result<MkvMergeIdentify, String> {
     let result = runner.run("mkvmerge", &["-J", file_path]).await?;
     if result.exit_code != 0 {
         return Err(format!("mkvmerge failed to identify file: {}", file_path));
     }
-    serde_json::from_str(&result.stdout).map_err(|e| format!("Failed to parse mkvmerge JSON: {}", e))
+    serde_json::from_str(&result.stdout)
+    .map_err(|e| format!("Failed to parse mkvmerge JSON: {}", e))
 }
 
 pub async fn get_audio_stream_index(
@@ -79,9 +83,21 @@ pub async fn get_audio_stream_index(
     Ok(first_audio_idx) // Return first audio track if no language match
 }
 
-
 pub async fn get_duration_s(runner: &CommandRunner, file_path: &str) -> Result<f64, String> {
-    let result = runner.run("ffprobe", &["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", file_path]).await?;
+    let result = runner
+    .run(
+        "ffprobe",
+         &[
+             "-v",
+         "error",
+         "-show_entries",
+         "format=duration",
+         "-of",
+         "csv=p=0",
+         file_path,
+         ],
+    )
+    .await?;
     if result.exit_code != 0 {
         return Err("ffprobe failed to get duration".to_string());
     }
@@ -98,13 +114,25 @@ fn ext_for_codec(ttype: &str, codec_id: &str) -> &'static str {
     match ttype {
         "video" => "bin",
         "audio" => match codec_id {
-            "A_AAC" => "aac", "A_AC3" => "ac3", "A_EAC3" => "eac3", "A_DTS" => "dts",
-            "A_FLAC" => "flac", "A_OPUS" => "opus", "A_TRUEHD" => "thd", "A_VORBIS" => "ogg",
-            "A_PCM" => "wav", "A_MS/ACM" => "wav", _ => "bin",
+            "A_AAC" => "aac",
+            "A_AC3" => "ac3",
+            "A_EAC3" => "eac3",
+            "A_DTS" => "dts",
+            "A_FLAC" => "flac",
+            "A_OPUS" => "opus",
+            "A_TRUEHD" => "thd",
+            "A_VORBIS" => "ogg",
+            "A_PCM" => "wav",
+            "A_MS/ACM" => "wav",
+            _ => "bin",
         },
         "subtitles" => match codec_id {
-            "S_TEXT/ASS" => "ass", "S_TEXT/SSA" => "ssa", "S_TEXT/UTF8" => "srt",
-            "S_HDMV/PGS" => "sup", "S_VOBSUB" => "sub", _ => "sub",
+            "S_TEXT/ASS" => "ass",
+            "S_TEXT/SSA" => "ssa",
+            "S_TEXT/UTF8" => "srt",
+            "S_HDMV/PGS" => "sup",
+            "S_VOBSUB" => "sub",
+            _ => "sub",
         },
         _ => "bin",
     }
@@ -119,10 +147,18 @@ fn pcm_codec_from_bit_depth(bit_depth: Option<u32>) -> &'static str {
     }
 }
 
-pub async fn extract_tracks(runner: &CommandRunner, source_file: &Path, tracks_to_select: &[Track], temp_dir: &Path, role: &str) -> Result<Vec<ExtractedTrack>, String> {
-    if tracks_to_select.is_empty() { return Ok(vec![]); }
+pub async fn extract_tracks(
+    runner: &CommandRunner,
+    source_file: &Path,
+    tracks_to_select: &[Track],
+    temp_dir: &Path,
+    role: &str,
+) -> Result<Vec<ExtractedTrack>, String> {
+    if tracks_to_select.is_empty() {
+        return Ok(vec![]);
+    }
 
-    let mut mkvextract_specs = Vec::new();
+    let mut mkvextract_specs: Vec<String> = Vec::new();
     let mut ffmpeg_jobs = Vec::new();
     let mut extracted_tracks = Vec::new();
 
@@ -137,7 +173,13 @@ pub async fn extract_tracks(runner: &CommandRunner, source_file: &Path, tracks_t
         if let Some(track_to_extract) = tracks_to_select.iter().find(|t| t.id == track_info.id) {
             let codec = track_info.properties.codec_id.as_deref().unwrap_or("");
             let ext = ext_for_codec(&track_info.r#type, codec);
-            let out_path = temp_dir.join(format!("{}_track_{}_{}.{}", role, source_file.file_stem().unwrap().to_string_lossy(), track_info.id, ext));
+            let out_path = temp_dir.join(format!(
+                "{}_track_{}_{}.{}",
+                role,
+                source_file.file_stem().unwrap().to_string_lossy(),
+                                                 track_info.id,
+                                                 ext
+            ));
 
             extracted_tracks.push(ExtractedTrack {
                 path: out_path.clone(),
@@ -153,25 +195,68 @@ pub async fn extract_tracks(runner: &CommandRunner, source_file: &Path, tracks_t
     }
 
     if !mkvextract_specs.is_empty() {
-        let mut args = vec!["tracks", &source_file.to_string_lossy()];
-        let specs_str: Vec<_> = mkvextract_specs.iter().map(AsRef::as_ref).collect();
-        args.extend_from_slice(&specs_str);
-        runner.run("mkvextract", &args).await?;
+        // FIX: avoid temporary &String lifetimes — build owned args then pass &str views
+        let src_owned = source_file.to_string_lossy().to_string();
+        let mut args_owned: Vec<String> = vec!["tracks".to_string(), src_owned];
+        args_owned.extend(mkvextract_specs); // already Vec<String>
+        let args_refs: Vec<&str> = args_owned.iter().map(|s| s.as_str()).collect();
+        runner.run("mkvextract", &args_refs).await?;
     }
 
     for (idx, path, track) in ffmpeg_jobs {
-        let copy_cmd = runner.run("ffmpeg", &["-y", "-v", "error", "-i", &source_file.to_string_lossy(), "-map", &format!("0:a:{}", idx), "-c:a", "copy", &path.to_string_lossy()]).await?;
+        let copy_cmd = runner
+        .run(
+            "ffmpeg",
+             &[
+                 "-y",
+             "-v",
+             "error",
+             "-i",
+             &source_file.to_string_lossy(),
+             "-map",
+             &format!("0:a:{}", idx),
+             "-c:a",
+             "copy",
+             &path.to_string_lossy(),
+             ],
+        )
+        .await?;
         if copy_cmd.exit_code != 0 {
-            runner.send_log(&format!("[WARN] A_MS/ACM stream copy failed for track {}. Falling back to PCM encode.", track.id)).await;
+            runner
+            .send_log(&format!(
+                "[WARN] A_MS/ACM stream copy failed for track {}. Falling back to PCM encode.",
+                track.id
+            ))
+            .await;
             let pcm_codec = pcm_codec_from_bit_depth(track.properties.audio_bits_per_sample);
-            runner.run("ffmpeg", &["-y", "-v", "error", "-i", &source_file.to_string_lossy(), "-map", &format!("0:a:{}", idx), "-acodec", pcm_codec, &path.to_string_lossy()]).await?;
+            runner
+            .run(
+                "ffmpeg",
+                 &[
+                     "-y",
+                 "-v",
+                 "error",
+                 "-i",
+                 &source_file.to_string_lossy(),
+                 "-map",
+                 &format!("0:a:{}", idx),
+                 "-acodec",
+                 pcm_codec,
+                 &path.to_string_lossy(),
+                 ],
+            )
+            .await?;
         }
     }
 
     Ok(extracted_tracks)
 }
 
-pub async fn extract_attachments(runner: &CommandRunner, source_file: &str, temp_dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub async fn extract_attachments(
+    runner: &CommandRunner,
+    source_file: &str,
+    temp_dir: &Path,
+) -> Result<Vec<PathBuf>, String> {
     let info = get_stream_info(runner, source_file).await?;
     let attachments = match info.attachments {
         Some(a) => a,
@@ -197,17 +282,32 @@ pub async fn extract_attachments(runner: &CommandRunner, source_file: &str, temp
 }
 
 async fn probe_keyframes(runner: &CommandRunner, file_path: &str) -> Result<Vec<u64>, String> {
-    let result = runner.run("ffprobe", &[
-        "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "packet=pts_time,flags",
-        "-of", "json", file_path
-    ]).await?;
-    if result.exit_code != 0 { return Err("ffprobe failed to get keyframes".to_string()); }
+    let result = runner
+    .run(
+        "ffprobe",
+         &[
+             "-v",
+         "error",
+         "-select_streams",
+         "v:0",
+         "-show_entries",
+         "packet=pts_time,flags",
+         "-of",
+         "json",
+         file_path,
+         ],
+    )
+    .await?;
+    if result.exit_code != 0 {
+        return Err("ffprobe failed to get keyframes".to_string());
+    }
 
-    let ffprobe_data: FfprobeOutput = serde_json::from_str(&result.stdout)
-    .map_err(|e| format!("Failed to parse ffprobe JSON: {}", e))?;
+    let ffprobe_data: FfprobeOutput =
+    serde_json::from_str(&result.stdout).map_err(|e| format!("Failed to parse ffprobe JSON: {}", e))?;
 
-    let mut keyframes_ns: Vec<u64> = ffprobe_data.packets.into_iter()
+    let mut keyframes_ns: Vec<u64> = ffprobe_data
+    .packets
+    .into_iter()
     .filter(|p| p.flags.contains('K'))
     .filter_map(|p| p.pts_time.parse::<f64>().ok())
     .map(|t| (t * 1_000_000_000.0).round() as u64)
@@ -217,7 +317,13 @@ async fn probe_keyframes(runner: &CommandRunner, file_path: &str) -> Result<Vec<
     Ok(keyframes_ns)
 }
 
-pub async fn process_chapters(runner: &CommandRunner, ref_file: &str, temp_dir: &Path, shift_ms: i64, config: &AppConfig) -> Result<Option<PathBuf>, String> {
+pub async fn process_chapters(
+    runner: &CommandRunner,
+    ref_file: &str,
+    temp_dir: &Path,
+    shift_ms: i64,
+    config: &AppConfig,
+) -> Result<Option<PathBuf>, String> {
     let result = runner.run("mkvextract", &["chapters", ref_file, "-"]).await?;
     if result.exit_code != 0 || result.stdout.trim().is_empty() {
         runner.send_log("No chapters found in reference file.").await;
@@ -227,14 +333,20 @@ pub async fn process_chapters(runner: &CommandRunner, ref_file: &str, temp_dir: 
     let input_xml = result.stdout.trim_start_matches('\u{feff}');
 
     let keyframes = if config.snap_chapters {
-        runner.send_log("[Chapters] Probing keyframes for snapping...").await;
+        runner
+        .send_log("[Chapters] Probing keyframes for snapping...")
+        .await;
         match probe_keyframes(runner, ref_file).await {
             Ok(kf) if !kf.is_empty() => {
-                runner.send_log(&format!("[Chapters] Found {} keyframes.", kf.len())).await;
+                runner
+                .send_log(&format!("[Chapters] Found {} keyframes.", kf.len()))
+                .await;
                 Some(kf)
-            },
+            }
             _ => {
-                runner.send_log("[Chapters] Snap skipped: could not load keyframes.").await;
+                runner
+                .send_log("[Chapters] Snap skipped: could not load keyframes.")
+                .await;
                 None
             }
         }
@@ -242,15 +354,28 @@ pub async fn process_chapters(runner: &CommandRunner, ref_file: &str, temp_dir: 
         None
     };
 
-    let modified_xml_bytes = transform_chapters(runner, input_xml, shift_ms, config, keyframes.as_deref()).await?;
+    let modified_xml_bytes =
+    transform_chapters(runner, input_xml, shift_ms, config, keyframes.as_deref()).await?;
 
-    let out_path = temp_dir.join(format!("{}_chapters_processed.xml", Path::new(ref_file).file_stem().unwrap().to_string_lossy()));
-    fs::write(&out_path, &modified_xml_bytes).await.map_err(|e| e.to_string())?;
+    let out_path = temp_dir.join(format!(
+        "{}_chapters_processed.xml",
+        Path::new(ref_file)
+        .file_stem()
+        .unwrap()
+        .to_string_lossy()
+    ));
+    fs::write(&out_path, &modified_xml_bytes)
+    .await
+    .map_err(|e| e.to_string())?;
 
-    runner.send_log(&format!("[Chapters] Modified chapters written to: {}", out_path.display())).await;
+    runner
+    .send_log(&format!(
+        "[Chapters] Modified chapters written to: {}",
+        out_path.display()
+    ))
+    .await;
     Ok(Some(out_path))
 }
-
 
 #[derive(Debug, Clone)]
 struct ChapterAtom {
@@ -259,7 +384,13 @@ struct ChapterAtom {
     original_events: Vec<XmlEvent>,
 }
 
-async fn transform_chapters(runner: &CommandRunner, xml_content: &str, shift_ms: i64, config: &AppConfig, keyframes: Option<&[u64]>) -> Result<Vec<u8>, String> {
+async fn transform_chapters(
+    runner: &CommandRunner,
+    xml_content: &str,
+    shift_ms: i64,
+    config: &AppConfig,
+    keyframes: Option<&[u64]>,
+) -> Result<Vec<u8>, String> {
     let mut atoms = parse_chapters_to_atoms(xml_content)?;
 
     // === Pass 2: Manipulate the intermediate representation ===
@@ -276,7 +407,8 @@ async fn transform_chapters(runner: &CommandRunner, xml_content: &str, shift_ms:
             let threshold_ns = (config.snap_threshold_ms as u64) * 1_000_000;
             atom.start_ns = find_snap_candidate(atom.start_ns, kf, &config.snap_mode, threshold_ns);
             if !config.snap_starts_only {
-                atom.end_ns = atom.end_ns.map(|ns| find_snap_candidate(ns, kf, &config.snap_mode, threshold_ns));
+                atom.end_ns =
+                atom.end_ns.map(|ns| find_snap_candidate(ns, kf, &config.snap_mode, threshold_ns));
             }
         }
     }
@@ -284,10 +416,16 @@ async fn transform_chapters(runner: &CommandRunner, xml_content: &str, shift_ms:
     // Apply end time normalization
     let mut fixed_end_times = 0;
     for i in 0..atoms.len() {
-        let next_start_ns = if i + 1 < atoms.len() { Some(atoms[i+1].start_ns) } else { None };
+        let next_start_ns = if i + 1 < atoms.len() {
+            Some(atoms[i + 1].start_ns)
+        } else {
+            None
+        };
         let start_ns = atoms[i].start_ns;
 
-        let mut desired_end_ns = atoms[i].end_ns.unwrap_or(start_ns + 1_000_000_000); // Default 1s duration
+        let mut desired_end_ns = atoms[i]
+        .end_ns
+        .unwrap_or(start_ns + 1_000_000_000); // Default 1s duration
         if let Some(next_start) = next_start_ns {
             desired_end_ns = desired_end_ns.min(next_start);
         }
@@ -299,9 +437,13 @@ async fn transform_chapters(runner: &CommandRunner, xml_content: &str, shift_ms:
         }
     }
     if fixed_end_times > 0 {
-        runner.send_log(&format!("[Chapters] Normalized {} chapter end times.", fixed_end_times)).await;
+        runner
+        .send_log(&format!(
+            "[Chapters] Normalized {} chapter end times.",
+            fixed_end_times
+        ))
+        .await;
     }
-
 
     // === Pass 3: Rebuild the XML from the modified data ===
     rebuild_xml_from_atoms(atoms, config)
@@ -310,7 +452,6 @@ async fn transform_chapters(runner: &CommandRunner, xml_content: &str, shift_ms:
 fn parse_chapters_to_atoms(xml_content: &str) -> Result<Vec<ChapterAtom>, String> {
     let mut parser = EventReader::from_str(xml_content);
     let mut atoms = Vec::new();
-    let mut top_level_events = Vec::new();
 
     // Find the start of the first ChapterAtom
     loop {
@@ -330,7 +471,14 @@ fn parse_chapters_to_atoms(xml_content: &str) -> Result<Vec<ChapterAtom>, String
         let mut current_start = 0;
         let mut current_end = None;
         let mut depth = 1; // Start inside the ChapterAtom
-        current_atom_events.push(XmlEvent::StartElement { name: "ChapterAtom".into(), attributes: vec![], namespace: Default::default() });
+        current_atom_events.push(XmlEvent::StartElement {
+            name: xml::name::OwnedName {
+                local_name: "ChapterAtom".to_string(),
+                                 namespace: None,
+                                 prefix: None,
+            },
+            attributes: vec![],
+        });
 
         loop {
             let event = parser.next().map_err(|e| e.to_string())?;
@@ -339,22 +487,28 @@ fn parse_chapters_to_atoms(xml_content: &str) -> Result<Vec<ChapterAtom>, String
                     depth += 1;
                     match name.local_name.as_str() {
                         "ChapterTimeStart" => {
-                            if let Ok(XmlEvent::Characters(chars)) = parser.next().map_err(|e|e.to_string()) {
-                                current_start = parse_time_ns(&chars).unwrap_or(0);
-                            }
-                            parser.next().ok(); // consume end element
-                            depth -=1;
-                        },
-                        "ChapterTimeEnd" => {
-                            if let Ok(XmlEvent::Characters(chars)) = parser.next().map_err(|e|e.to_string()) {
-                                current_end = parse_time_ns(&chars);
-                            }
-                            parser.next().ok(); // consume end element
-                            depth -=1;
+                            if let Ok(XmlEvent::Characters(chars)) =
+                                parser.next().map_err(|e| e.to_string())
+                                {
+                                    current_start = parse_time_ns(&chars).unwrap_or(0);
+                                }
+                                // consume end element
+                                let _ = parser.next();
+                            depth -= 1;
                         }
-                        _ => current_atom_events.push(event.clone())
+                        "ChapterTimeEnd" => {
+                            if let Ok(XmlEvent::Characters(chars)) =
+                                parser.next().map_err(|e| e.to_string())
+                                {
+                                    current_end = parse_time_ns(&chars).ok();
+                                }
+                                // consume end element
+                                let _ = parser.next();
+                            depth -= 1;
+                        }
+                        _ => current_atom_events.push(event.clone()),
                     }
-                },
+                }
                 XmlEvent::EndElement { name, .. } => {
                     depth -= 1;
                     if depth == 0 && name.local_name == "ChapterAtom" {
@@ -362,15 +516,33 @@ fn parse_chapters_to_atoms(xml_content: &str) -> Result<Vec<ChapterAtom>, String
                         break;
                     }
                     current_atom_events.push(event.clone());
-                },
+                }
                 XmlEvent::EndDocument => break,
-                _ => current_atom_events.push(event.clone())
+                _ => current_atom_events.push(event.clone()),
             }
         }
-        atoms.push(ChapterAtom { start_ns: current_start, end_ns: current_end, original_events: current_atom_events });
+        atoms.push(ChapterAtom {
+            start_ns: current_start,
+            end_ns: current_end,
+            original_events: current_atom_events,
+        });
 
-        if let Ok(XmlEvent::EndDocument) = parser.peek() {
-            break;
+        // Exit when reaching end of document
+        // (EventReader doesn't support peek; break when we find EndDocument above)
+        // Stop if next event cannot be read
+        match parser.next() {
+            Ok(XmlEvent::EndDocument) => break,
+            Ok(XmlEvent::StartElement { name, .. }) if name.local_name == "ChapterAtom" => {
+                // rewind one step by pushing back this start into our processing
+                // We can't actually "push back", so just continue with depth=1 using this as start
+                // But since we already consumed it, we need to rebuild it similarly:
+                // Instead, simply continue; the outer loop will create a new atom and the inner loop will read inside it.
+                // (The above logic handles any nesting properly.)
+                // To properly handle, we set the parser state to be just after StartElement.
+                // We emulate by continuing; the inner loop will start reading from inside this element.
+            }
+            Ok(_) => continue,
+            Err(_) => break,
         }
     }
 
@@ -379,23 +551,43 @@ fn parse_chapters_to_atoms(xml_content: &str) -> Result<Vec<ChapterAtom>, String
 
 fn rebuild_xml_from_atoms(atoms: Vec<ChapterAtom>, config: &AppConfig) -> Result<Vec<u8>, String> {
     let mut buffer: Vec<u8> = Vec::new();
-    let mut writer = EmitterConfig::new().perform_indent(true).create_writer(&mut buffer);
+    let mut writer = EmitterConfig::new()
+    .perform_indent(true)
+    .create_writer(&mut buffer);
 
-    writer.write(WriteXmlEvent::start_element("Chapters")).map_err(|e|e.to_string())?;
-    writer.write(WriteXmlEvent::start_element("EditionEntry")).map_err(|e|e.to_string())?;
+    writer
+    .write(WriteXmlEvent::start_element("Chapters"))
+    .map_err(|e| e.to_string())?;
+    writer
+    .write(WriteXmlEvent::start_element("EditionEntry"))
+    .map_err(|e| e.to_string())?;
 
     for (i, atom) in atoms.iter().enumerate() {
-        writer.write(WriteXmlEvent::start_element("ChapterAtom")).map_err(|e|e.to_string())?;
+        writer
+        .write(WriteXmlEvent::start_element("ChapterAtom"))
+        .map_err(|e| e.to_string())?;
 
         // Write required time elements
-        writer.write(WriteXmlEvent::start_element("ChapterTimeStart")).map_err(|e|e.to_string())?;
-        writer.write(WriteXmlEvent::characters(&format_time_ns(atom.start_ns))).map_err(|e|e.to_string())?;
-        writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
+        writer
+        .write(WriteXmlEvent::start_element("ChapterTimeStart"))
+        .map_err(|e| e.to_string())?;
+        writer
+        .write(WriteXmlEvent::characters(&format_time_ns(atom.start_ns)))
+        .map_err(|e| e.to_string())?;
+        writer
+        .write(WriteXmlEvent::end_element())
+        .map_err(|e| e.to_string())?;
 
         if let Some(end_ns) = atom.end_ns {
-            writer.write(WriteXmlEvent::start_element("ChapterTimeEnd")).map_err(|e|e.to_string())?;
-            writer.write(WriteXmlEvent::characters(&format_time_ns(end_ns))).map_err(|e|e.to_string())?;
-            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
+            writer
+            .write(WriteXmlEvent::start_element("ChapterTimeEnd"))
+            .map_err(|e| e.to_string())?;
+            writer
+            .write(WriteXmlEvent::characters(&format_time_ns(end_ns)))
+            .map_err(|e| e.to_string())?;
+            writer
+            .write(WriteXmlEvent::end_element())
+            .map_err(|e| e.to_string())?;
         }
 
         // Write the other original events, substituting ChapterDisplay if needed
@@ -406,44 +598,82 @@ fn rebuild_xml_from_atoms(atoms: Vec<ChapterAtom>, config: &AppConfig) -> Result
                     if name.local_name == "ChapterDisplay" {
                         display_handled = true;
                         if config.rename_chapters {
-                            writer.write(WriteXmlEvent::start_element("ChapterDisplay")).map_err(|e|e.to_string())?;
+                            writer
+                            .write(WriteXmlEvent::start_element("ChapterDisplay"))
+                            .map_err(|e| e.to_string())?;
                             let name_str = format!("Chapter {:02}", i + 1);
-                            writer.write(WriteXmlEvent::start_element("ChapterString")).map_err(|e|e.to_string())?;
-                            writer.write(WriteXmlEvent::characters(&name_str)).map_err(|e|e.to_string())?;
-                            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
-                            writer.write(WriteXmlEvent::start_element("ChapterLanguage")).map_err(|e|e.to_string())?;
-                            writer.write(WriteXmlEvent::characters("und")).map_err(|e|e.to_string())?;
-                            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
-                            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // ChapterDisplay
+                            writer
+                            .write(WriteXmlEvent::start_element("ChapterString"))
+                            .map_err(|e| e.to_string())?;
+                            writer
+                            .write(WriteXmlEvent::characters(&name_str))
+                            .map_err(|e| e.to_string())?;
+                            writer
+                            .write(WriteXmlEvent::end_element())
+                            .map_err(|e| e.to_string())?;
+                            writer
+                            .write(WriteXmlEvent::start_element("ChapterLanguage"))
+                            .map_err(|e| e.to_string())?;
+                            writer
+                            .write(WriteXmlEvent::characters("und"))
+                            .map_err(|e| e.to_string())?;
+                            writer
+                            .write(WriteXmlEvent::end_element())
+                            .map_err(|e| e.to_string())?;
+                            writer
+                            .write(WriteXmlEvent::end_element())
+                            .map_err(|e| e.to_string())?; // ChapterDisplay
                         } else {
-                            writer.write(we).map_err(|e|e.to_string())?;
+                            writer.write(we).map_err(|e| e.to_string())?;
                         }
                     } else if name.local_name != "ChapterAtom" {
-                        writer.write(we).map_err(|e|e.to_string())?;
+                        writer.write(we).map_err(|e| e.to_string())?;
                     }
                 } else {
-                    writer.write(we).map_err(|e|e.to_string())?;
+                    writer.write(we).map_err(|e| e.to_string())?;
                 }
             }
         }
 
         if !display_handled && config.rename_chapters {
-            writer.write(WriteXmlEvent::start_element("ChapterDisplay")).map_err(|e|e.to_string())?;
+            writer
+            .write(WriteXmlEvent::start_element("ChapterDisplay"))
+            .map_err(|e| e.to_string())?;
             let name_str = format!("Chapter {:02}", i + 1);
-            writer.write(WriteXmlEvent::start_element("ChapterString")).map_err(|e|e.to_string())?;
-            writer.write(WriteXmlEvent::characters(&name_str)).map_err(|e|e.to_string())?;
-            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
-            writer.write(WriteXmlEvent::start_element("ChapterLanguage")).map_err(|e|e.to_string())?;
-            writer.write(WriteXmlEvent::characters("und")).map_err(|e|e.to_string())?;
-            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?;
-            writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // ChapterDisplay
+            writer
+            .write(WriteXmlEvent::start_element("ChapterString"))
+            .map_err(|e| e.to_string())?;
+            writer
+            .write(WriteXmlEvent::characters(&name_str))
+            .map_err(|e| e.to_string())?;
+            writer
+            .write(WriteXmlEvent::end_element())
+            .map_err(|e| e.to_string())?;
+            writer
+            .write(WriteXmlEvent::start_element("ChapterLanguage"))
+            .map_err(|e| e.to_string())?;
+            writer
+            .write(WriteXmlEvent::characters("und"))
+            .map_err(|e| e.to_string())?;
+            writer
+            .write(WriteXmlEvent::end_element())
+            .map_err(|e| e.to_string())?;
+            writer
+            .write(WriteXmlEvent::end_element())
+            .map_err(|e| e.to_string())?; // ChapterDisplay
         }
 
-        writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // ChapterAtom
+        writer
+        .write(WriteXmlEvent::end_element())
+        .map_err(|e| e.to_string())?; // ChapterAtom
     }
 
-    writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // EditionEntry
-    writer.write(WriteXmlEvent::end_element()).map_err(|e|e.to_string())?; // Chapters
+    writer
+    .write(WriteXmlEvent::end_element())
+    .map_err(|e| e.to_string())?; // EditionEntry
+    writer
+    .write(WriteXmlEvent::end_element())
+    .map_err(|e| e.to_string())?; // Chapters
     Ok(buffer)
 }
 
@@ -455,7 +685,15 @@ fn find_snap_candidate(ts_ns: u64, keyframes: &[u64], mode: &str, threshold_ns: 
             let prev_kf = if i > 0 { Some(keyframes[i - 1]) } else { None };
             let next_kf = keyframes.get(i);
             match (prev_kf, next_kf) {
-                (Some(p), Some(&n)) => if mode == "previous" { p } else if ts_ns - p < n - ts_ns { p } else { n },
+                (Some(p), Some(&n)) => {
+                    if mode == "previous" {
+                        p
+                    } else if ts_ns - p < n - ts_ns {
+                        p
+                    } else {
+                        n
+                    }
+                }
                 (Some(p), None) => p,
                 (None, Some(&n)) => n,
                 (None, None) => ts_ns,
@@ -471,14 +709,16 @@ fn find_snap_candidate(ts_ns: u64, keyframes: &[u64], mode: &str, threshold_ns: 
 
 fn parse_time_ns(t: &str) -> Result<u64, ()> {
     let parts: Vec<&str> = t.split(':').collect();
-    if parts.len() != 3 { return Err(()); }
+    if parts.len() != 3 {
+        return Err(());
+    }
     let s_frac: Vec<&str> = parts[2].split('.').collect();
     let (ss_str, frac_str_opt) = if s_frac.len() == 2 {
         (s_frac[0], Some(s_frac[1]))
     } else if s_frac.len() == 1 {
         (s_frac[0], None)
     } else {
-        return Err(())
+        return Err(());
     };
 
     let hh: u64 = parts[0].parse().map_err(|_| ())?;
@@ -486,8 +726,11 @@ fn parse_time_ns(t: &str) -> Result<u64, ()> {
     let ss: u64 = ss_str.parse().map_err(|_| ())?;
 
     let mut frac_str = frac_str_opt.unwrap_or("0").to_string();
-    if frac_str.len() > 9 { frac_str.truncate(9); }
-    else { frac_str.push_str(&"0".repeat(9 - frac_str.len())); }
+    if frac_str.len() > 9 {
+        frac_str.truncate(9);
+    } else {
+        frac_str.push_str(&"0".repeat(9 - frac_str.len()));
+    }
     let ns: u64 = frac_str.parse().map_err(|_| ())?;
 
     Ok((hh * 3600 + mm * 60 + ss) * 1_000_000_000 + ns)
