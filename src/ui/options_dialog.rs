@@ -1,9 +1,9 @@
 use crate::Message;
 use iced::widget::{button, column, row, text, Space};
 use iced::{Alignment, Element, Length};
-use iced_advanced::{Card, TabBar, TabLabel}; // UPDATED
+use iced_aw::{Card, TabBar, TabLabel}; // UPDATED
 
-pub fn view<'a>(on_close: Message) -> Element<'a, Message> { // UPDATED
+pub fn view<'a>(on_close: Message) -> Element<'a, Message> {
     let header = text("Application Settings");
 
     // Placeholder content for the tabs

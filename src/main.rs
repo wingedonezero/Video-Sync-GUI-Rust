@@ -1,6 +1,6 @@
 use iced::widget::{column, container};
 use iced::{executor, Application, Command, Element, Length, Settings, Theme};
-use iced_advanced::Modal; // UPDATED
+use iced_aw::Modal; // UPDATED
 
 mod ui;
 use ui::{job_queue_dialog, main_window, options_dialog};
