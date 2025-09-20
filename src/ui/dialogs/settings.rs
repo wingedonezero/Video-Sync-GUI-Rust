@@ -1,6 +1,7 @@
 use iced::widget::{button, column, container, row, text, text_input, checkbox, Space};
 use iced::{Element, Length};
-use iced_aw::widgets::tabs::{self, TabLabel};
+use iced_aw::widget::tabs;
+use iced_aw::widget::tab_bar::TabLabel;
 
 pub struct SettingsDialog {
     active_tab: TabId,

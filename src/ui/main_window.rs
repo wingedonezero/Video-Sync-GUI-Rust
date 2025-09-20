@@ -273,7 +273,7 @@ impl MainWindow {
                         self.log_messages
                         .iter()
                         .map(|msg| text(msg).size(12).into())
-                        .collect(),
+                        .collect::<Vec<_>>(),
                     )
                     .spacing(2)
                 )
@@ -301,7 +301,7 @@ impl MainWindow {
 
     fn create_file_input_row<'a>(
         &self,
-        label: &str,
+        label: &'a str,
         value: &str,
         on_input: impl Fn(String) -> Message + 'a,
                                  on_browse: Message,

@@ -3,7 +3,7 @@ use iced::{Element, Border, Theme, Length};
 
 /// Creates a section with title and content, matching Python's QGroupBox style
 pub fn section<'a, Message: 'a>(
-    title: &str,
+    title: &'a str,
     content: impl Into<Element<'a, Message>>,
 ) -> Element<'a, Message> {
     container(

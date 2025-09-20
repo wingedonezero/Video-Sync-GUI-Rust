@@ -1,6 +1,5 @@
 use iced::widget::{button, column, container, row, text, Space};
 use iced::{Element, Length};
-use iced_aw::widgets::table;
 
 pub struct JobQueueDialog {
     jobs: Vec<Job>,
