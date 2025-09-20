@@ -1,6 +1,6 @@
 use iced::widget::{column, container};
 use iced::{executor, Application, Command, Element, Length, Settings, Theme};
-use iced_aw::Modal;
+use iced_advanced::Modal; // UPDATED
 
 mod ui;
 use ui::{job_queue_dialog, main_window, options_dialog};
@@ -112,27 +112,26 @@ impl Application for VsgApp {
                                              self.archive_logs,
         );
 
-        let mut base = Modal::new(main_content, || container(column![]).into())
-        .backdrop(Message::NoOp)
-        .on_esc(Message::NoOp);
+        let base = Modal::new(main_content)
+        .on_blur(Some(Message::NoOp));
 
-        if self.show_job_queue {
-            base = Modal::new(base, || {
-                job_queue_dialog::view().on_close(Message::CloseJobQueue)
-            })
-            .backdrop(Message::CloseJobQueue)
-            .on_esc(Message::CloseJobQueue);
-        }
+        let job_queue_overlay = if self.show_job_queue {
+            Some(job_queue_dialog::view(Message::CloseJobQueue))
+        } else {
+            None
+        };
 
-        if self.show_options {
-            base = Modal::new(base, || {
-                options_dialog::view().on_close(Message::CloseOptions)
-            })
-            .backdrop(Message::CloseOptions)
-            .on_esc(Message::CloseOptions);
-        }
+        let options_overlay = if self.show_options {
+            Some(options_dialog::view(Message::CloseOptions))
+        } else {
+            None
+        };
 
-        container(base)
+        let with_job_queue = base.overlay(job_queue_overlay);
+        let with_options = Modal::new(with_job_queue).overlay(options_overlay);
+
+
+        container(with_options)
         .width(Length::Fill)
         .height(Length::Fill)
         .center_x()

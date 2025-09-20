@@ -3,7 +3,8 @@ use iced::widget::{
     button, checkbox, column, container, progress_bar, row, scrollable, text, text_input, Column,
     Container, Row, Rule, Space,
 };
-use iced::{Alignment, Element, Length};
+// UPDATED
+use iced::{alignment, length, Alignment, Element, Length};
 
 fn styled_container<'a>(content: impl Into<Element<'a, Message>>) -> Container<'a, Message> {
     container(content).padding(5)
@@ -24,11 +25,12 @@ fn file_input_row<'a>(
     on_change: impl Fn(String) -> Message + 'a,
 ) -> Row<'a, Message> {
     row![
-        text(label).width(Length::FillPortion(2)),
+        // UPDATED: Length::FillPortion is now length::proportion
+        text(label).width(length::proportion(2)),
         text_input("Select file or directory...", value)
         .on_input(on_change)
-        .width(Length::FillPortion(7)),
-        button("Browse...").width(Length::FillPortion(1))
+        .width(length::proportion(7)),
+        button("Browse...").width(length::proportion(1))
     ]
     .spacing(10)
     .align_items(Alignment::Center)
@@ -115,7 +117,7 @@ pub fn view<'a>(
 
     let log_group = group_box(
         "Log",
-        column![scrollable(text(log_output))],
+        column![scrollable(text(log_output).font(iced::Font::MONOSPACE))],
     );
 
     let main_content = column![

@@ -1,9 +1,9 @@
 use crate::Message;
 use iced::widget::{button, column, row, text, Space};
 use iced::{Alignment, Element, Length};
-use iced_aw::{Card, TabBar, TabLabel};
+use iced_advanced::{Card, TabBar, TabLabel}; // UPDATED
 
-pub fn view<'a>() -> Card<'a, Message> {
+pub fn view<'a>(on_close: Message) -> Element<'a, Message> { // UPDATED
     let header = text("Application Settings");
 
     // Placeholder content for the tabs
@@ -11,6 +11,7 @@ pub fn view<'a>() -> Card<'a, Message> {
         column![text(format!("Settings for {} will go here.", title))]
         .width(Length::Fill)
         .align_items(Alignment::Center)
+        .height(Length::Fixed(450.0)) // Give tabs a fixed height
     };
 
     let tabs = TabBar::new(0, Message::NoOp)
@@ -23,11 +24,11 @@ pub fn view<'a>() -> Card<'a, Message> {
     )
     .push(TabLabel::Text("Logging".to_string()), tab_content("Logging"));
 
-    let body = column![tabs].height(Length::Fixed(500.0));
+    let body = column![tabs];
 
     let footer = row![
         Space::with_width(Length::Fill),
-        button("Cancel").on_press(Message::CloseOptions),
+        button("Cancel").on_press(on_close.clone()),
         button("Save")
     ]
     .spacing(10)
@@ -36,5 +37,6 @@ pub fn view<'a>() -> Card<'a, Message> {
     Card::new(header, body)
     .foot(footer)
     .max_width(900.0)
-    .style(iced_aw::style::Card::Primary)
+    .on_close(on_close) // UPDATED
+    .into()
 }

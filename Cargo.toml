@@ -4,5 +4,5 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-iced = { version = "0.12.1", features = ["tokio"] }
-iced_aw = { version = "0.8.0", features = ["modal", "card"] }
+iced = { version = "0.13.1", features = ["tokio"] }
+iced_advanced = { version = "0.12.0", features = ["modal", "card"] }

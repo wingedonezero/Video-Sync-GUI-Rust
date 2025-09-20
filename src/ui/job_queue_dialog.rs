@@ -1,9 +1,9 @@
 use crate::Message;
-use iced::widget::{button, column, container, row, text, Space};
+use iced::widget::{button, column, row, text, Space};
 use iced::{Alignment, Element, Length};
-use iced_aw::Card;
+use iced_advanced::Card; // UPDATED
 
-pub fn view<'a>() -> Card<'a, Message> {
+pub fn view<'a>(on_close: Message) -> Element<'a, Message> { // UPDATED
     let header = text("Job Queue");
 
     let body = column![
@@ -21,7 +21,7 @@ pub fn view<'a>() -> Card<'a, Message> {
 
     let footer = row![
         Space::with_width(Length::Fill),
-        button("Cancel").on_press(Message::CloseJobQueue),
+        button("Cancel").on_press(on_close.clone()),
         button("Start Processing Queue")
     ]
     .spacing(10)
@@ -30,5 +30,6 @@ pub fn view<'a>() -> Card<'a, Message> {
     Card::new(header, body)
     .foot(footer)
     .max_width(1200.0)
-    .style(iced_aw::style::Card::Primary)
+    .on_close(on_close) // UPDATED
+    .into()
 }
