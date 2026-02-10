@@ -1,40 +1,18 @@
-[package]
-name = "video_sync_merger"
+[workspace]
+resolver = "2"
+members = [
+    "crates/vsg_core",
+    "crates/vsg_ui",
+]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+rust-version = "1.70"
 
-[dependencies]
-# Iced with all features for multi-window support
-iced = { version = "0.13.1", features = ["debug", "tokio", "lazy", "advanced", "image", "svg", "canvas", "qr_code", "multi-window"] }
-
-# iced_aw 0.12.2 - default features include everything except cupertino
-iced_aw = "0.12.2"
-
-# Async runtime
-tokio = { version = "1.41", features = ["full"] }
-
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# File dialogs
-rfd = "0.15"
-
-# System directories
-dirs = "5.0"
-
-# Date/time
-chrono = "0.4"
-
-# Error handling
-anyhow = "1.0"
+[workspace.dependencies]
+# Shared dependencies - keep versions in sync across crates
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
 thiserror = "2.0"
-
-# Async trait support
-async-trait = "0.1"
-
-[profile.release]
-opt-level = 3
-lto = true
-strip = true
-codegen-units = 1

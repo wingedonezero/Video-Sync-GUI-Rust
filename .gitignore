@@ -1,0 +1,31 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+
+todo.txt
+
+docs/LibreOffice Writer.odt
+
+Text File.txt
+
+docs/ARCHITECTURE.odt
+
+.todo.txt.kate-swp
+
+# User settings
+settings.json
+.config/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+PHANTOM_SIGNS_TRACK_PLAN.md
+
+# Self-contained Python environment
+Dependencies/
+.venv/
+venv/
+.python/
