@@ -28,16 +28,12 @@ pub enum AnalysisMode {
     #[default]
     #[serde(rename = "Audio Correlation")]
     AudioCorrelation,
-    /// Video frame difference analysis.
-    #[serde(rename = "VideoDiff")]
-    VideoDiff,
 }
 
 impl std::fmt::Display for AnalysisMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AnalysisMode::AudioCorrelation => write!(f, "Audio Correlation"),
-            AnalysisMode::VideoDiff => write!(f, "VideoDiff"),
         }
     }
 }
@@ -123,16 +119,6 @@ impl SyncMode {
     pub fn all() -> &'static [SyncMode] {
         &[Self::PositiveOnly, Self::AllowNegative]
     }
-
-    /// Create from index (for UI combo boxes).
-    pub fn from_index(index: usize) -> Self {
-        Self::all().get(index).copied().unwrap_or_default()
-    }
-
-    /// Get index of this mode (for UI combo boxes).
-    pub fn to_index(&self) -> usize {
-        Self::all().iter().position(|m| m == self).unwrap_or(0)
-    }
 }
 
 impl std::fmt::Display for SyncMode {
@@ -172,22 +158,7 @@ impl CorrelationMethod {
 
     /// Get all available methods as a list.
     pub fn all() -> &'static [CorrelationMethod] {
-        &[
-            Self::Scc,
-            Self::GccPhat,
-            Self::GccScot,
-            Self::Whitened,
-        ]
-    }
-
-    /// Create from index (for UI combo boxes).
-    pub fn from_index(index: usize) -> Self {
-        Self::all().get(index).copied().unwrap_or_default()
-    }
-
-    /// Get index of this method (for UI combo boxes).
-    pub fn to_index(&self) -> usize {
-        Self::all().iter().position(|m| m == self).unwrap_or(0)
+        &[Self::Scc, Self::GccPhat, Self::GccScot, Self::Whitened]
     }
 }
 
@@ -239,16 +210,6 @@ impl DelaySelectionMode {
             Self::FirstStable,
             Self::Average,
         ]
-    }
-
-    /// Create from index (for UI combo boxes).
-    pub fn from_index(index: usize) -> Self {
-        Self::all().get(index).copied().unwrap_or_default()
-    }
-
-    /// Get index of this mode (for UI combo boxes).
-    pub fn to_index(&self) -> usize {
-        Self::all().iter().position(|m| m == self).unwrap_or(0)
     }
 }
 
