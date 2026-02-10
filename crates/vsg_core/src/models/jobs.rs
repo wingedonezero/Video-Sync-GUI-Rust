@@ -122,14 +122,6 @@ pub struct PlanItem {
     #[serde(default)]
     pub custom_name: String,
 
-    // === Processing flags ===
-    /// Track has been adjusted by stepping correction.
-    #[serde(default)]
-    pub stepping_adjusted: bool,
-    /// Track has been adjusted by frame-level sync.
-    #[serde(default)]
-    pub frame_adjusted: bool,
-
     // === Preservation/correction flags ===
     /// Track was preserved from a previous run (not re-processed).
     #[serde(default)]
@@ -164,8 +156,6 @@ impl PlanItem {
             container_delay_ms_raw: 0.0,
             custom_lang: String::new(),
             custom_name: String::new(),
-            stepping_adjusted: false,
-            frame_adjusted: false,
             is_preserved: false,
             is_corrected: false,
             correction_source: None,

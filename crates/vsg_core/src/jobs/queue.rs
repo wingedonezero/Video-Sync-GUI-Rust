@@ -27,6 +27,7 @@ impl Default for QueueState {
 
 /// Clipboard data for copy/paste between jobs.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct LayoutClipboard {
     /// The copied layout.
     pub layout: ManualLayout,
@@ -55,18 +56,16 @@ impl JobQueue {
         // Try to load existing queue
         let jobs = if queue_file.exists() {
             match fs::read_to_string(&queue_file) {
-                Ok(content) => {
-                    match serde_json::from_str::<QueueState>(&content) {
-                        Ok(state) => {
-                            tracing::info!("Loaded {} jobs from queue.json", state.jobs.len());
-                            state.jobs
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to parse queue.json: {}", e);
-                            Vec::new()
-                        }
+                Ok(content) => match serde_json::from_str::<QueueState>(&content) {
+                    Ok(state) => {
+                        tracing::info!("Loaded {} jobs from queue.json", state.jobs.len());
+                        state.jobs
                     }
-                }
+                    Err(e) => {
+                        tracing::warn!("Failed to parse queue.json: {}", e);
+                        Vec::new()
+                    }
+                },
                 Err(e) => {
                     tracing::warn!("Failed to read queue.json: {}", e);
                     Vec::new()
