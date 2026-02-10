@@ -1,7 +1,10 @@
-//! VSG UI - User Interface (CXX-Qt implementation pending)
+//! VSG UI - User Interface (CXX-Qt implementation)
 //!
-//! This crate will contain the Qt-based GUI implementation using CXX-Qt.
-//! Currently a placeholder.
+//! This crate contains the Qt-based GUI implementation using CXX-Qt.
+
+pub mod bridge;
+pub mod core_integration;
+pub mod windows;
 
 /// Returns the UI version.
 pub fn version() -> &'static str {
