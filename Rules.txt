@@ -1,5 +1,270 @@
-1. **Discuss Before Changes** - No implementations without approval
-2. **Libs Discussed As Needed** - Research replacements/alternatives together
-3. **Research, Don't Assume** - Especially for Rust, consult official docs
-4. **Latest Lib Versions** - Use latest stable, discuss issues first
-5. **Rewrite for Quality** - Same features, better architecture, no single points of failure
+# AI Coding Rules - Video Sync GUI Rust Rewrite (v1)
+
+## 0) Prime Directive
+- Prioritize correctness, clarity, maintainability, and reproducibility over cleverness.
+- Leverage Rust's type system and ownership model to enforce correctness at compile time.
+
+## 1) Discuss Before Changes (Approval Required)
+- Do not implement or refactor anything non-trivial until you:
+  1) explain the plan,
+  2) list files/modules impacted,
+  3) call out risks/tradeoffs (especially unsafe code, performance implications, breaking changes),
+  4) get explicit approval.
+- Small, local fixes (typos, obvious bugfix in the same function) are allowed, but still explain what you changed.
+
+## 2) Preserve Behavior by Default
+- Maintain feature parity with the Python version unless an intentional change is explicitly approved.
+- When changing behavior is necessary, clearly document:
+  - what changes,
+  - why it must change,
+  - how it's validated (tests, manual verification).
+
+## 3) Dependencies Are a Discussion
+- Do not add new crates without proposing options + tradeoffs.
+- Prefer fewer dependencies; justify any new one.
+- Always use latest stable versions unless there's a specific reason not to.
+- When proposing a crate, consider:
+  - Maintenance status (last update, issue activity)
+  - Compatibility (MSRV, platform support)
+  - Binary size impact
+  - Async runtime compatibility (we use tokio)
+- If a crate/version is uncertain, stop and discuss first.
+
+## 4) Research, Don't Assume
+- When Rust API/behavior is uncertain: consult official docs (docs.rs, The Rust Book, std docs).
+- For external tools (mkvmerge, ffmpeg): consult official documentation.
+- If you can't verify: say so and propose the safest path.
+
+## 5) Code Style and Tooling (Rust)
+- Rust code MUST be:
+  - formatted with **rustfmt** (`cargo fmt`),
+  - linted with **clippy** (`cargo clippy -- -D warnings`),
+  - type-checked and built with **cargo check** and **cargo build**.
+- Follow Rust naming conventions:
+  - `snake_case` for functions, variables, modules
+  - `PascalCase` for types, traits, enums
+  - `SCREAMING_SNAKE_CASE` for constants
+  - `'lowercase` for lifetimes
+- Commands:
+  - `cargo fmt` - format code
+  - `cargo clippy --workspace -- -D warnings` - lint with warnings as errors
+  - `cargo check --workspace` - type check without building
+  - `cargo build --workspace` - build all crates
+  - `cargo test --workspace` - run tests
+
+## 6) Rust Philosophy
+Core principles (explicit, typed, safe):
+- **Ownership over reference counting**: Prefer owned types, use `Rc`/`Arc` only when needed for shared ownership.
+- **Compile-time safety**: Use the type system to prevent bugs (newtypes, enums, Option, Result).
+- **Explicit error handling**: No panics in library code, always return `Result` for fallible operations.
+- **Zero-cost abstractions**: Prefer traits and generics over dynamic dispatch unless necessary.
+- **Unsafe only when necessary**: No `unsafe` without justification and SAFETY comments.
+
+## 7) Type System Best Practices
+
+### 7a) Strong Typing
+- Use newtypes for domain concepts (e.g., `struct Milliseconds(i64)` instead of raw `i64`)
+- Use enums with data over booleans or strings (e.g., `DelaySelection::Mode` not `"mode"`)
+
+### 7b) Error Handling
+- Library code (`vsg_core`): Always return `Result<T, E>`, never panic
+- Use `thiserror::Error` for all error types
+- UI code: `.unwrap()` only when truly impossible to fail (document why)
+- Use `?` operator, don't swallow errors
+
+### 7c) Option vs Result
+- `Option<T>` = absent/optional value (e.g., optional chapter name)
+- `Result<T, E>` = operation failure (e.g., file doesn't exist)
+- Never use `Option` to represent errors
+
+### 7d) Struct Organization
+- Derive common traits: `Debug`, `Clone`, `Copy`, `PartialEq`, `Eq`
+- Use `#[non_exhaustive]` for public enums/structs that may grow
+- Document all `pub` items with `///`
+- Minimize visibility: prefer `pub(crate)` or private fields
+
+## 8) Type Organization (Module Structure)
+
+### Shared types (cross-module): `vsg_core/src/models/`
+Types imported by 2+ unrelated modules belong here:
+- `enums.rs` - Core enums (`TrackType`, `AnalysisMode`, `JobStatus`, `LogLevel`, etc.)
+- `media.rs` - `Track`, `StreamProps`, `Attachment`
+- `jobs.rs` - `JobSpec`, `Delays`, `MergePlan`, `JobResult`
+
+### Local types (single module): stays in module
+Types used only within a module stay in that module's `types.rs`:
+- `vsg_core/src/analysis/types.rs` - `AnalysisOutput`, `MethodResult`, `DelayCandidate`
+- `vsg_core/src/chapters/types.rs` - `Chapter`, `ChapterOutput`
+- `vsg_core/src/extraction/types.rs` - `ExtractOutput`, `ProbeData`
+- `vsg_core/src/orchestrator/types.rs` - `Context`, `JobState`
+
+### Rule of thumb
+If you need to import a type into an unrelated module, move it to `models/`.
+
+## 9) Serialization Standards
+
+- Use `serde` for all serializable types
+- Config files: TOML (`toml` crate)
+- Job queue: JSON (`serde_json`)
+- Use `#[serde(default)]` for optional fields
+- Use builder pattern for complex construction (existing: `MkvmergeOptionsBuilder`)
+
+## 10) Documentation Standards
+- All `pub` items require `///` doc comments
+- Use `//!` for module-level docs
+- Include examples for non-obvious APIs
+
+## 11) Architecture: Where Code Belongs
+
+### 11.1) The Three Layers (Rust Adaptation)
+
+```
+ORCHESTRATOR (vsg_core/orchestrator/pipeline.rs)
+    → Creates Context, runs PipelineStep sequence, validates state
+
+STEPS (vsg_core/orchestrator/steps/*.rs)
+    → Micro-orchestrators: coordinate, log, control flow, update JobState
+    → NO business logic - delegate to modules
+    → Implement PipelineStep trait
+
+MODULES (vsg_core/analysis/, chapters/, extraction/, etc.)
+    → ALL business logic as pure functions or stateless structs
+    → Strongly typed inputs/outputs (no stringly-typed APIs)
+    → No direct Context or JobState access - accept specific arguments
+```
+
+### 11.2) PipelineStep Implementation Rules
+
+Each step MUST:
+1. Implement `PipelineStep` trait
+2. Delegate business logic to module functions (e.g., `analysis::run_analysis()`)
+3. Update `JobState` with results
+4. Log using `Context.logger` and report progress
+5. Validate inputs/outputs
+
+### 11.3) Module Function Signatures
+
+- Accept specific types, NOT `Context` or `JobState`
+- Return `Result<T, E>` for fallible operations
+- Accept logger as `&JobLogger` parameter
+
+### 11.4) JobState is Write-Once
+
+- Fields start as `None` or empty
+- Each step populates its field exactly once
+- Never overwrite previous step outputs
+
+## 12) Concurrency and Async
+
+- Use **tokio** (multi-threaded) for async operations
+- Blocking I/O: use `tokio::task::spawn_blocking`
+- Shared state: `Arc<Mutex<T>>` (e.g., `JobQueue`, `ConfigManager`)
+- Prefer message passing over shared state when possible
+- Consider `parking_lot::Mutex` if lock contention is high
+
+## 13) Testing Expectations
+
+- Unit tests: `#[cfg(test)] mod tests { ... }` in same file
+- Integration tests: `tests/` directory at crate root
+- For risky changes: add tests OR provide validation plan
+- Test data: `tests/fixtures/` with small committed files
+- Use `tempfile` for temp directories
+- Mock external tools when possible
+
+## 14) Performance Considerations
+
+- **Prefer iteration over allocation**: Use iterators and `collect()` only when necessary.
+- **Avoid cloning large data**: Pass slices (`&[T]`) or references (`&T`) when possible.
+- **Use `Cow<str>` for conditional cloning**: When a string might be borrowed or owned.
+- **Profile before optimizing**: Use `cargo flamegraph` or `perf` to identify bottlenecks.
+- **Benchmark critical paths**: Use `criterion` for micro-benchmarks if performance is critical.
+
+## 15) Gradual Migration Policy (Avoid Giant Diffs)
+
+- Do NOT run mass reformat/refactor across the entire repo unless explicitly requested.
+- Default behavior:
+  - Format/lint only the files you touch (`cargo fmt --package vsg_core`, `cargo clippy -p vsg_core`).
+  - Keep diffs focused on the intended change.
+  - Preserve existing patterns unless explicitly refactoring.
+- If a module is already being edited, it's OK to clean it up as part of the change.
+
+## 16) Implement Only What's Needed
+
+- **Do NOT add fields, enums, features, or code for functionality that doesn't exist yet.**
+- Only implement what's required for the current feature or task being worked on.
+- Avoid "future-proofing" or adding placeholder code for features not yet designed.
+- If you find unused code (fields, enums, functions) during work, note it for cleanup but don't add more.
+- Examples of what NOT to do:
+  - Adding enum variants for features not yet implemented
+  - Adding struct fields that aren't used by any current code
+  - Creating types or modules for planned but unstarted features
+  - Adding configuration options for non-existent functionality
+- Exception: Only add forward-looking code when explicitly requested for a specific upcoming feature.
+
+## 17) GUI-Specific Rules (vsg_ui)
+
+- UI implementation will use **CXX-Qt** for Qt bindings.
+- Keep UI code (`vsg_ui`) completely separate from business logic (`vsg_core`).
+- `vsg_core` MUST remain UI-agnostic and have zero UI dependencies.
+- UI-specific rules and patterns will be added as the CXX-Qt implementation progresses.
+
+## 18) External Tool Integration
+
+- Use `std::process::Command` for external tools
+- Validate tool exists before running
+- Log all commands: `logger.command("mkvmerge", &args)`
+- Capture stdout/stderr for errors
+- Handle non-zero exit codes as errors
+- Parse JSON with `serde_json` and typed structs
+
+## 19) Logging Infrastructure
+
+- **Application-level**: `tracing` → `logs/app.log`
+- **Per-job**: `JobLogger` → file + GUI callback
+- Use semantic methods: `.phase()`, `.info()`, `.success()`, `.error()`, `.warn()`, `.command()`, `.debug()`
+
+## 20) File I/O Best Practices
+
+- Use `PathBuf` for owned paths, `&Path` for borrowed.
+- Use `std::fs` for basic operations, `tokio::fs` for async.
+- Always handle I/O errors: return `Result<T, io::Error>` or custom error.
+- Use `tempfile` for atomic writes: write to temp, then rename.
+- Validate paths before use: check existence, permissions.
+
+## 21) Rewrite Quality Rules
+
+- Keep feature parity with Python version unless approved otherwise
+- Remove single points of failure where feasible
+- Improve architecture without changing external behavior
+- Prefer incremental refactors over big rewrites
+- Document architectural decisions
+
+## 22) Output Requirements
+
+When producing code changes:
+- Summarize what changed and why
+- Note any behavior changes or breaking changes
+- Provide commands: `cargo fmt -p <crate>`, `cargo clippy -p <crate> -- -D warnings`, `cargo test -p <crate>`
+- Justify any new dependencies
+
+## 23) Forbidden Patterns (Fix When Encountered)
+
+| Bad | Good |
+|-----|------|
+| `unwrap()` in library code | `?` operator or explicit error handling |
+| Stringly-typed APIs (`fn foo(mode: &str)`) | Enums or newtypes |
+| `panic!()` in library code | `Result<T, E>` with descriptive error |
+| Large `match` in `update()` | Delegate to `handlers/` module |
+| Business logic in UI code | Move to `vsg_core` module |
+| Blocking I/O in async context | `tokio::task::spawn_blocking` |
+| `Arc<Mutex<T>>` without justification | Use message passing or re-architect |
+| `unsafe` without SAFETY comment | Document why it's safe or remove it |
+
+## 24) Workspace Management
+
+- Keep `vsg_core` and `vsg_ui` as separate crates in the workspace.
+- `vsg_core` MUST have zero dependencies on `vsg_ui`.
+- `vsg_ui` can depend on `vsg_core` (via `path = "../vsg_core"`).
+- Shared dependencies go in workspace `[dependencies]`.
+- Version numbers should be in sync across workspace.
+
