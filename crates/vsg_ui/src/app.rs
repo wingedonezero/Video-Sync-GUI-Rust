@@ -22,6 +22,7 @@ use vsg_core::models::JobSpec;
 use vsg_core::orchestrator::steps::AnalyzeStep;
 use vsg_core::orchestrator::{CancelHandle, Context, JobState, Pipeline};
 
+use crate::job_queue::{JobQueueDialog, JobQueueMsg, JobQueueOutput};
 use crate::settings::{SettingsDialog, SettingsMsg, SettingsOutput};
 
 /// Messages for the main application window.
@@ -41,6 +42,8 @@ pub enum AppMsg {
     SettingsApplied(Box<Settings>),
     /// Open job queue dialog
     OpenJobQueue,
+    /// Job queue requested processing start
+    JobQueueStartProcessing(Vec<vsg_core::jobs::JobQueueEntry>),
     /// Append a message to the log
     Log(String),
     /// Update status label
@@ -79,6 +82,8 @@ pub struct App {
     source3_delay: Option<i64>,
     /// Settings dialog child component
     settings_dialog: Controller<SettingsDialog>,
+    /// Job queue dialog child component
+    job_queue_dialog: Controller<JobQueueDialog>,
     /// Cancel handle for running analysis
     cancel_handle: Option<CancelHandle>,
     /// Whether a job is currently running
@@ -366,6 +371,14 @@ impl SimpleComponent for App {
                 SettingsOutput::Applied(settings) => AppMsg::SettingsApplied(settings),
             });
 
+        // Create job queue dialog child component
+        let job_queue_dialog = JobQueueDialog::builder()
+            .launch(root.clone().upcast::<gtk::Window>())
+            .forward(sender.input_sender(), |output| match output {
+                JobQueueOutput::StartProcessing(jobs) => AppMsg::JobQueueStartProcessing(jobs),
+                JobQueueOutput::Log(msg) => AppMsg::Log(msg),
+            });
+
         let model = App {
             config,
             base_dir,
@@ -377,6 +390,7 @@ impl SimpleComponent for App {
             source2_delay: None,
             source3_delay: None,
             settings_dialog,
+            job_queue_dialog,
             cancel_handle: None,
             running: false,
         };
@@ -453,7 +467,13 @@ impl SimpleComponent for App {
                 self.archive_logs = self.config.settings().logging.archive_logs;
             }
             AppMsg::OpenJobQueue => {
-                sender.input(AppMsg::Log("Job queue dialog coming next.".into()));
+                self.job_queue_dialog.emit(JobQueueMsg::Show);
+            }
+            AppMsg::JobQueueStartProcessing(jobs) => {
+                sender.input(AppMsg::Log(format!(
+                    "Queue processing requested for {} job(s) — batch pipeline not yet wired.",
+                    jobs.len()
+                )));
             }
             AppMsg::AnalyzeOnly => {
                 // Validation
