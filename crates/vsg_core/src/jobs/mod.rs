@@ -5,7 +5,7 @@
 //! - `JobQueueEntry`: Individual job with sources, status, and layout
 //! - `ManualLayout`: User-configured track selection for a job
 //! - `SignatureGenerator`: Track/structure signatures for layout compatibility
-//! - `discovery`: Job discovery from source files (stub for now)
+//! - `discovery`: Job discovery from source files/folders (single + batch mode)
 
 mod discovery;
 mod layout;
