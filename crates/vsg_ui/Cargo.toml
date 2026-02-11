@@ -1,14 +1,10 @@
 [package]
 name = "vsg_ui"
-description = "Video Sync GUI - CXX-Qt user interface"
+description = "Video Sync GUI - GTK4/Relm4 user interface"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-
-[lib]
-name = "vsg_ui"
-path = "src/lib.rs"
 
 [[bin]]
 name = "video-sync-gui"
@@ -18,27 +14,10 @@ path = "src/main.rs"
 # Core library
 vsg_core = { path = "../vsg_core" }
 
-# CXX-Qt (latest as of Feb 2026)
-cxx = "1.0"
-cxx-qt = "0.8.0"
-cxx-qt-lib = "0.8.0"
-cxx-qt-lib-extras = "0.8.0"
+# GTK4 / Relm4
+gtk = { package = "gtk4", version = "0.10.3", features = ["v4_10"] }
+relm4 = "0.10.1"
 
-# Async runtime (for vsg_core integration)
-tokio = { version = "1.49.0", features = ["rt-multi-thread", "macros", "sync"] }
-
-# File dialogs
-rfd = "0.17.2"
-
-# Serialization (for config)
+# Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
-
-# Logging
-tracing = "0.1.44"
-
-# Threading utilities
-parking_lot = "0.12.5"
-
-[build-dependencies]
-cxx-qt-build = "0.8.0"

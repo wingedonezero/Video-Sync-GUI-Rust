@@ -52,14 +52,26 @@ pub enum FilteringMethod {
     HighPass,
 }
 
+impl FilteringMethod {
+    /// Get the display name for this method.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::LowPass => "Low Pass",
+            Self::BandPass => "Band Pass",
+            Self::HighPass => "High Pass",
+        }
+    }
+
+    /// Get all available methods.
+    pub fn all() -> &'static [FilteringMethod] {
+        &[Self::None, Self::LowPass, Self::BandPass, Self::HighPass]
+    }
+}
+
 impl std::fmt::Display for FilteringMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            FilteringMethod::None => write!(f, "None"),
-            FilteringMethod::LowPass => write!(f, "Low Pass"),
-            FilteringMethod::BandPass => write!(f, "Band Pass"),
-            FilteringMethod::HighPass => write!(f, "High Pass"),
-        }
+        write!(f, "{}", self.name())
     }
 }
 
@@ -74,6 +86,28 @@ pub enum SnapMode {
     Nearest,
     /// Snap to next keyframe.
     Next,
+}
+
+impl SnapMode {
+    /// Get the display name for this mode.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Previous => "Previous",
+            Self::Nearest => "Nearest",
+            Self::Next => "Next",
+        }
+    }
+
+    /// Get all available modes.
+    pub fn all() -> &'static [SnapMode] {
+        &[Self::Previous, Self::Nearest, Self::Next]
+    }
+}
+
+impl std::fmt::Display for SnapMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name())
+    }
 }
 
 /// Status of a completed job.

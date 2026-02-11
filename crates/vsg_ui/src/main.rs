@@ -1,9 +1,13 @@
 //! Video Sync GUI - Main Entry Point
 //!
-//! CXX-Qt based application for video/audio synchronization and merging.
+//! GTK4/Relm4 based application for video/audio synchronization and merging.
+
+mod app;
+mod settings;
+
+use relm4::RelmApp;
 
 fn main() {
-    println!("Video Sync GUI - CXX-Qt Edition");
-    println!("Basic compilation successful!");
-    println!("Next: Wire up Qt application and main window");
+    let app = RelmApp::new("com.videosyncgui.app");
+    app.run::<app::App>(());
 }
