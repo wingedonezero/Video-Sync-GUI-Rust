@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::models::TrackType;
 
@@ -119,6 +120,49 @@ impl ManualLayout {
             source_settings: HashMap::new(),
         }
     }
+
+    /// Convert to the JSON layout format expected by JobSpec/MuxStep.
+    pub fn to_job_spec_layout(&self) -> Vec<HashMap<String, serde_json::Value>> {
+        self.final_tracks
+            .iter()
+            .map(|entry| {
+                let mut map = HashMap::new();
+                map.insert("source".into(), json!(entry.source_key));
+                map.insert("id".into(), json!(entry.track_id as u64));
+                map.insert(
+                    "type".into(),
+                    json!(match entry.track_type {
+                        TrackType::Video => "video",
+                        TrackType::Audio => "audio",
+                        TrackType::Subtitles => "subtitles",
+                    }),
+                );
+                map.insert("codec".into(), json!(entry.codec_id));
+                map.insert("language".into(), json!("und"));
+                map.insert("name".into(), json!(""));
+                map.insert("is_default".into(), json!(entry.config.is_default));
+                map.insert(
+                    "is_forced_display".into(),
+                    json!(entry.config.is_forced_display),
+                );
+                map.insert(
+                    "custom_lang".into(),
+                    json!(entry.config.custom_lang.as_deref().unwrap_or("")),
+                );
+                map.insert(
+                    "custom_name".into(),
+                    json!(entry.config.custom_name.as_deref().unwrap_or("")),
+                );
+                // External track support
+                if entry.source_key == "External" {
+                    if let Some(ref path) = entry.generated_source_path {
+                        map.insert("original_path".into(), json!(path));
+                    }
+                }
+                map
+            })
+            .collect()
+    }
 }
 
 impl Default for ManualLayout {
@@ -136,6 +180,9 @@ pub struct FinalTrackEntry {
     pub source_key: String,
     /// Track type (video, audio, subtitles).
     pub track_type: TrackType,
+    /// Codec identifier (e.g., "A_AAC", "S_TEXT/UTF8").
+    #[serde(default)]
+    pub codec_id: String,
     /// User configuration for this track.
     pub config: TrackConfig,
     /// Position in user's ordered output list (0-indexed).
@@ -184,6 +231,7 @@ impl FinalTrackEntry {
             track_id,
             source_key,
             track_type,
+            codec_id: String::new(),
             config: TrackConfig::default(),
             user_order_index: 0,
             position_in_source_type: 0,

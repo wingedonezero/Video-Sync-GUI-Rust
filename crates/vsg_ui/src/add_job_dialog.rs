@@ -288,8 +288,7 @@ impl AddJobDialog {
         });
 
         // Drag-and-drop per source entry
-        let drop_target =
-            gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
+        let drop_target = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
         let s = sender.input_sender().clone();
         drop_target.connect_drop(move |_target, value, _x, _y| {
             if let Ok(file_list) = value.get::<gdk::FileList>() {

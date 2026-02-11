@@ -17,10 +17,10 @@ use gtk::prelude::*;
 use relm4::prelude::*;
 
 use vsg_core::config::{ConfigManager, Settings};
-use vsg_core::logging::{GuiLogCallback, LogConfig, LogLevel, JobLogger};
+use vsg_core::logging::{GuiLogCallback, JobLogger, LogConfig, LogLevel};
 use vsg_core::models::JobSpec;
 use vsg_core::orchestrator::steps::AnalyzeStep;
-use vsg_core::orchestrator::{CancelHandle, Context, JobState, Pipeline};
+use vsg_core::orchestrator::{create_standard_pipeline, CancelHandle, Context, JobState, Pipeline};
 
 use crate::job_queue::{JobQueueDialog, JobQueueMsg, JobQueueOutput};
 use crate::settings::{SettingsDialog, SettingsMsg, SettingsOutput};
@@ -47,11 +47,21 @@ pub enum AppMsg {
     /// Append a message to the log
     Log(String),
     /// Update status label
+    #[allow(dead_code)]
     Status(String),
     /// Update progress bar (0-100)
     Progress(u32),
     /// Analysis completed (or failed)
     AnalysisDone(Result<AnalysisResult, String>),
+    /// One batch job completed
+    BatchJobDone {
+        job_index: usize,
+        total_jobs: usize,
+        job_name: String,
+        result: Result<BatchJobResult, String>,
+    },
+    /// Entire batch finished
+    BatchComplete,
 }
 
 /// Result from a completed analysis.
@@ -59,6 +69,14 @@ pub enum AppMsg {
 pub struct AnalysisResult {
     pub source2_delay: i64,
     pub source3_delay: i64,
+}
+
+/// Result from a completed batch job.
+#[derive(Debug)]
+pub struct BatchJobResult {
+    pub source2_delay: i64,
+    pub source3_delay: i64,
+    pub output_path: Option<PathBuf>,
 }
 
 /// Main application state.
@@ -438,17 +456,13 @@ impl SimpleComponent for App {
                     .modal(true)
                     .build();
 
-                dialog.open(
-                    root.as_ref(),
-                    gtk::gio::Cancellable::NONE,
-                    move |result| {
-                        if let Ok(file) = result {
-                            if let Some(path) = file.path() {
-                                sender.input(AppMsg::SourceSelected(index, path));
-                            }
+                dialog.open(root.as_ref(), gtk::gio::Cancellable::NONE, move |result| {
+                    if let Ok(file) = result {
+                        if let Some(path) = file.path() {
+                            sender.input(AppMsg::SourceSelected(index, path));
                         }
-                    },
-                );
+                    }
+                });
             }
             AppMsg::SourceSelected(index, path) => {
                 self.sources[index] = path.display().to_string();
@@ -470,10 +484,174 @@ impl SimpleComponent for App {
                 self.job_queue_dialog.emit(JobQueueMsg::Show);
             }
             AppMsg::JobQueueStartProcessing(jobs) => {
+                if self.running {
+                    sender.input(AppMsg::Log(
+                        "[WARNING] Processing already running.".into(),
+                    ));
+                    return;
+                }
+                self.running = true;
+                self.progress = 0;
+                self.status = format!("Processing {} job(s)...", jobs.len());
                 sender.input(AppMsg::Log(format!(
-                    "Queue processing requested for {} job(s) — batch pipeline not yet wired.",
+                    "Starting batch processing: {} job(s)",
                     jobs.len()
                 )));
+
+                let settings = self.config.settings().clone();
+                let base_dir = self.base_dir.clone();
+                let log_sender = sender.input_sender().clone();
+                let progress_sender = sender.input_sender().clone();
+                let done_sender = sender.input_sender().clone();
+
+                std::thread::spawn(move || {
+                    let total = jobs.len();
+
+                    // Determine output dir
+                    let output_base = base_dir.join(&settings.paths.output_folder);
+                    let output_dir = if total > 1 {
+                        // Batch: subfolder from source parent folder name
+                        if let Some(src1) = jobs[0].sources.get("Source 1") {
+                            if let Some(parent_name) =
+                                src1.parent().and_then(|p| p.file_name())
+                            {
+                                output_base.join(parent_name)
+                            } else {
+                                output_base.clone()
+                            }
+                        } else {
+                            output_base.clone()
+                        }
+                    } else {
+                        output_base.clone()
+                    };
+
+                    for (idx, job) in jobs.iter().enumerate() {
+                        let job_num = idx + 1;
+                        let job_name = job
+                            .sources
+                            .get("Source 1")
+                            .and_then(|p| p.file_stem())
+                            .map(|s| s.to_string_lossy().to_string())
+                            .unwrap_or_else(|| format!("job_{job_num}"));
+
+                        log_sender.emit(AppMsg::Log(format!(
+                            "=== Job {job_num}/{total}: {job_name} ==="
+                        )));
+
+                        // Build JobSpec from JobQueueEntry
+                        let mut job_spec = JobSpec::new(job.sources.clone());
+                        if let Some(ref layout) = job.layout {
+                            job_spec.manual_layout = Some(layout.to_job_spec_layout());
+                            job_spec.attachment_sources = layout.attachment_sources.clone();
+                        }
+
+                        // Create per-job work dir
+                        let timestamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0);
+                        let work_dir = base_dir
+                            .join(&settings.paths.temp_root)
+                            .join(format!("job_{}_{}", job_name, timestamp));
+
+                        // Create logger
+                        let ls = log_sender.clone();
+                        let gui_cb: GuiLogCallback = Box::new(move |msg: &str| {
+                            ls.emit(AppMsg::Log(msg.to_string()));
+                        });
+                        let log_config = LogConfig {
+                            level: LogLevel::Info,
+                            compact: settings.logging.compact,
+                            progress_step: settings.logging.progress_step,
+                            error_tail: settings.logging.error_tail as usize,
+                            show_timestamps: true,
+                        };
+                        let logger = match JobLogger::new(
+                            &job_name,
+                            &output_dir,
+                            log_config,
+                            Some(gui_cb),
+                        ) {
+                            Ok(l) => Arc::new(l),
+                            Err(e) => {
+                                done_sender.emit(AppMsg::BatchJobDone {
+                                    job_index: idx,
+                                    total_jobs: total,
+                                    job_name: job_name.clone(),
+                                    result: Err(format!("Failed to create logger: {e}")),
+                                });
+                                continue;
+                            }
+                        };
+
+                        // Create pipeline (full merge if layout present, analyze-only if not)
+                        let pipeline = if job.layout.is_some() {
+                            create_standard_pipeline()
+                        } else {
+                            Pipeline::new().with_step(AnalyzeStep::new())
+                        };
+
+                        // Progress callback
+                        let ps = progress_sender.clone();
+                        let idx_for_progress = idx;
+                        let total_for_progress = total;
+                        let progress_cb: vsg_core::orchestrator::ProgressCallback =
+                            Box::new(move |_step, percent, _msg| {
+                                let batch_progress = ((idx_for_progress as u32 * 100 + percent)
+                                    / total_for_progress as u32)
+                                    .min(100);
+                                ps.emit(AppMsg::Progress(batch_progress));
+                            });
+
+                        let ctx = Context::new(
+                            job_spec,
+                            settings.clone(),
+                            job_name.clone(),
+                            work_dir,
+                            output_dir.clone(),
+                            logger.clone(),
+                        )
+                        .with_progress_callback(progress_cb);
+                        let mut state = JobState::new(&job.id);
+
+                        match pipeline.run(&ctx, &mut state) {
+                            Ok(_) => {
+                                let s2 = state
+                                    .delays()
+                                    .and_then(|d| d.source_delays_ms.get("Source 2").copied())
+                                    .unwrap_or(0);
+                                let s3 = state
+                                    .delays()
+                                    .and_then(|d| d.source_delays_ms.get("Source 3").copied())
+                                    .unwrap_or(0);
+                                let output_path =
+                                    state.mux.as_ref().map(|m| m.output_path.clone());
+                                done_sender.emit(AppMsg::BatchJobDone {
+                                    job_index: idx,
+                                    total_jobs: total,
+                                    job_name: job_name.clone(),
+                                    result: Ok(BatchJobResult {
+                                        source2_delay: s2,
+                                        source3_delay: s3,
+                                        output_path,
+                                    }),
+                                });
+                            }
+                            Err(e) => {
+                                done_sender.emit(AppMsg::BatchJobDone {
+                                    job_index: idx,
+                                    total_jobs: total,
+                                    job_name: job_name.clone(),
+                                    result: Err(e.to_string()),
+                                });
+                            }
+                        }
+
+                        logger.flush();
+                    }
+                    done_sender.emit(AppMsg::BatchComplete);
+                });
             }
             AppMsg::AnalyzeOnly => {
                 // Validation
@@ -494,22 +672,26 @@ impl SimpleComponent for App {
 
                 // Build JobSpec
                 let mut sources_map = HashMap::new();
-                sources_map
-                    .insert("Source 1".to_string(), PathBuf::from(&self.sources[0]));
-                sources_map
-                    .insert("Source 2".to_string(), PathBuf::from(&self.sources[1]));
+                sources_map.insert("Source 1".to_string(), PathBuf::from(&self.sources[0]));
+                sources_map.insert("Source 2".to_string(), PathBuf::from(&self.sources[1]));
                 if !self.sources[2].is_empty() {
-                    sources_map
-                        .insert("Source 3".to_string(), PathBuf::from(&self.sources[2]));
+                    sources_map.insert("Source 3".to_string(), PathBuf::from(&self.sources[2]));
                 }
                 let job_spec = JobSpec::new(sources_map);
 
                 // Clone settings and paths for the thread
                 let settings = self.config.settings().clone();
-                let logs_folder = self.base_dir.join(&settings.paths.logs_folder);
-                let work_dir = self.base_dir.join(&settings.paths.temp_root).join("analyze");
+                let work_dir = self
+                    .base_dir
+                    .join(&settings.paths.temp_root)
+                    .join("analyze");
                 let output_dir = self.base_dir.join(&settings.paths.output_folder);
-                let job_name = "analyze_only".to_string();
+
+                // Job name from Source 1 filename stem (matches Python behavior)
+                let job_name = PathBuf::from(&self.sources[0])
+                    .file_stem()
+                    .map(|s| s.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "analyze_only".to_string());
 
                 // Sender clones for callbacks
                 let log_sender = sender.input_sender().clone();
@@ -543,10 +725,10 @@ impl SimpleComponent for App {
 
                 // Spawn background thread
                 std::thread::spawn(move || {
-                    // Create logger
+                    // Create logger — log file goes to output_dir (matches Python behavior)
                     let logger = match JobLogger::new(
                         &job_name,
-                        &logs_folder,
+                        &output_dir,
                         log_config,
                         Some(gui_callback),
                     ) {
@@ -632,6 +814,48 @@ impl SimpleComponent for App {
                         sender.input(AppMsg::Log(format!("[ERROR] Analysis failed: {e}")));
                     }
                 }
+            }
+            AppMsg::BatchJobDone {
+                job_index,
+                total_jobs,
+                job_name,
+                result,
+            } => match result {
+                Ok(r) => {
+                    self.status = format!(
+                        "Job {}/{} complete: {}",
+                        job_index + 1,
+                        total_jobs,
+                        job_name
+                    );
+                    let output_info = r
+                        .output_path
+                        .as_ref()
+                        .map(|p| format!(", Output: {}", p.display()))
+                        .unwrap_or_default();
+                    sender.input(AppMsg::Log(format!(
+                        "[SUCCESS] {} — S2: {}ms, S3: {}ms{}",
+                        job_name, r.source2_delay, r.source3_delay, output_info
+                    )));
+                    self.source2_delay = Some(r.source2_delay);
+                    self.source3_delay = Some(r.source3_delay);
+                }
+                Err(e) => {
+                    self.status = format!(
+                        "Job {}/{} failed: {}",
+                        job_index + 1,
+                        total_jobs,
+                        job_name
+                    );
+                    sender.input(AppMsg::Log(format!("[ERROR] {} — {}", job_name, e)));
+                }
+            },
+            AppMsg::BatchComplete => {
+                self.running = false;
+                self.progress = 100;
+                self.status = "Batch complete.".to_string();
+                self.cancel_handle = None;
+                sender.input(AppMsg::Log("=== All jobs finished ===".into()));
             }
             AppMsg::Log(message) => {
                 if !self.log_text.is_empty() {
