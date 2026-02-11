@@ -15,7 +15,7 @@ path = "src/main.rs"
 vsg_core = { path = "../vsg_core" }
 
 # GTK4 / Relm4
-gtk = { package = "gtk4", version = "0.10.3", features = ["v4_10"] }
+gtk = { package = "gtk4", version = "0.10.3", features = ["v4_16"] }
 relm4 = "0.10.1"
 
 # Serialization

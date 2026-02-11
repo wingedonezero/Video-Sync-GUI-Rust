@@ -161,10 +161,7 @@ fn enum_dropdown<T: std::fmt::Display>(variants: &[T], current_index: u32) -> gt
 
 /// Find the index of a value in an enum's `all()` list.
 fn enum_index<T: PartialEq>(variants: &[T], value: &T) -> u32 {
-    variants
-        .iter()
-        .position(|v| v == value)
-        .unwrap_or(0) as u32
+    variants.iter().position(|v| v == value).unwrap_or(0) as u32
 }
 
 /// Create a frame with a vertical box inside.
@@ -246,15 +243,31 @@ impl SimpleComponent for SettingsDialog {
 
         let paths_page = gtk::Box::new(gtk::Orientation::Vertical, 8);
         paths_page.set_margin_all(12);
-        paths_page.append(&path_row("Output Folder:", &output_folder_entry, s, PathField::OutputFolder));
-        paths_page.append(&path_row("Temp Root:", &temp_root_entry, s, PathField::TempRoot));
-        paths_page.append(&path_row("Logs Folder:", &logs_folder_entry, s, PathField::LogsFolder));
+        paths_page.append(&path_row(
+            "Output Folder:",
+            &output_folder_entry,
+            s,
+            PathField::OutputFolder,
+        ));
+        paths_page.append(&path_row(
+            "Temp Root:",
+            &temp_root_entry,
+            s,
+            PathField::TempRoot,
+        ));
+        paths_page.append(&path_row(
+            "Logs Folder:",
+            &logs_folder_entry,
+            s,
+            PathField::LogsFolder,
+        ));
 
         // --- Tab 2: Logging ---
         let compact_check = gtk::CheckButton::with_label("Compact log format (filter progress)");
         let autoscroll_check = gtk::CheckButton::with_label("Auto-scroll log output");
         let archive_logs_check = gtk::CheckButton::with_label("Archive logs on completion");
-        let show_options_pretty_check = gtk::CheckButton::with_label("Show mkvmerge options (pretty)");
+        let show_options_pretty_check =
+            gtk::CheckButton::with_label("Show mkvmerge options (pretty)");
         let show_options_json_check = gtk::CheckButton::with_label("Show mkvmerge options (JSON)");
         let error_tail_spin = spin_int(settings.logging.error_tail, 1.0, 100.0, 1.0);
         let progress_step_spin = spin_int(settings.logging.progress_step, 1.0, 100.0, 5.0);
@@ -272,7 +285,10 @@ impl SimpleComponent for SettingsDialog {
         // --- Tab 3: Analysis ---
         let correlation_method_dropdown = enum_dropdown(
             CorrelationMethod::all(),
-            enum_index(CorrelationMethod::all(), &settings.analysis.correlation_method),
+            enum_index(
+                CorrelationMethod::all(),
+                &settings.analysis.correlation_method,
+            ),
         );
         let lang_source1_entry = gtk::Entry::new();
         lang_source1_entry.set_placeholder_text(Some("e.g. eng, jpn (empty = auto)"));
@@ -285,28 +301,50 @@ impl SimpleComponent for SettingsDialog {
         let scan_start_spin = spin_float(settings.analysis.scan_start_pct, 0.0, 100.0, 1.0, 1);
         let scan_end_spin = spin_float(settings.analysis.scan_end_pct, 0.0, 100.0, 1.0, 1);
         let min_match_pct_spin = spin_float(settings.analysis.min_match_pct, 0.0, 100.0, 0.5, 1);
-        let min_accepted_chunks_spin = spin_int(settings.analysis.min_accepted_chunks, 1.0, 50.0, 1.0);
+        let min_accepted_chunks_spin =
+            spin_int(settings.analysis.min_accepted_chunks, 1.0, 50.0, 1.0);
         let use_soxr_check = gtk::CheckButton::with_label("Use SOXR high-quality resampling");
-        let audio_peak_fit_check = gtk::CheckButton::with_label("Quadratic peak fitting (sub-sample accuracy)");
+        let audio_peak_fit_check =
+            gtk::CheckButton::with_label("Quadratic peak fitting (sub-sample accuracy)");
         let filtering_method_dropdown = enum_dropdown(
             FilteringMethod::all(),
             enum_index(FilteringMethod::all(), &settings.analysis.filtering_method),
         );
-        let filter_low_spin = spin_float(settings.analysis.filter_low_cutoff_hz, 20.0, 20000.0, 10.0, 0);
-        let filter_high_spin = spin_float(settings.analysis.filter_high_cutoff_hz, 20.0, 20000.0, 10.0, 0);
-        let multi_corr_enabled_check = gtk::CheckButton::with_label("Enable multi-correlation comparison");
+        let filter_low_spin = spin_float(
+            settings.analysis.filter_low_cutoff_hz,
+            20.0,
+            20000.0,
+            10.0,
+            0,
+        );
+        let filter_high_spin = spin_float(
+            settings.analysis.filter_high_cutoff_hz,
+            20.0,
+            20000.0,
+            10.0,
+            0,
+        );
+        let multi_corr_enabled_check =
+            gtk::CheckButton::with_label("Enable multi-correlation comparison");
         let multi_corr_scc_check = gtk::CheckButton::with_label("SCC");
         let multi_corr_gcc_phat_check = gtk::CheckButton::with_label("GCC-PHAT");
         let multi_corr_gcc_scot_check = gtk::CheckButton::with_label("GCC-SCOT");
         let multi_corr_whitened_check = gtk::CheckButton::with_label("Whitened");
         let delay_selection_dropdown = enum_dropdown(
             DelaySelectionMode::all(),
-            enum_index(DelaySelectionMode::all(), &settings.analysis.delay_selection_mode),
+            enum_index(
+                DelaySelectionMode::all(),
+                &settings.analysis.delay_selection_mode,
+            ),
         );
-        let first_stable_min_chunks_spin = spin_int(settings.analysis.first_stable_min_chunks, 1.0, 50.0, 1.0);
-        let first_stable_skip_unstable_check = gtk::CheckButton::with_label("Skip unstable segments");
-        let early_cluster_window_spin = spin_int(settings.analysis.early_cluster_window, 1.0, 50.0, 1.0);
-        let early_cluster_threshold_spin = spin_int(settings.analysis.early_cluster_threshold, 1.0, 50.0, 1.0);
+        let first_stable_min_chunks_spin =
+            spin_int(settings.analysis.first_stable_min_chunks, 1.0, 50.0, 1.0);
+        let first_stable_skip_unstable_check =
+            gtk::CheckButton::with_label("Skip unstable segments");
+        let early_cluster_window_spin =
+            spin_int(settings.analysis.early_cluster_window, 1.0, 50.0, 1.0);
+        let early_cluster_threshold_spin =
+            spin_int(settings.analysis.early_cluster_threshold, 1.0, 50.0, 1.0);
         let sync_mode_dropdown = enum_dropdown(
             SyncMode::all(),
             enum_index(SyncMode::all(), &settings.analysis.sync_mode),
@@ -339,7 +377,10 @@ impl SimpleComponent for SettingsDialog {
         // Match thresholds
         let (match_frame, match_box) = framed_vbox("Match Thresholds", 6);
         match_box.append(&label_row("Min match %:", &min_match_pct_spin));
-        match_box.append(&label_row("Min accepted chunks:", &min_accepted_chunks_spin));
+        match_box.append(&label_row(
+            "Min accepted chunks:",
+            &min_accepted_chunks_spin,
+        ));
         analysis_page.append(&match_frame);
 
         // Audio processing
@@ -371,7 +412,10 @@ impl SimpleComponent for SettingsDialog {
         let (delay_frame, delay_box) = framed_vbox("Delay Selection", 6);
         delay_box.append(&label_row("Mode:", &delay_selection_dropdown));
         let (fs_frame, fs_box) = framed_vbox("First Stable Settings", 4);
-        fs_box.append(&label_row("Min consecutive chunks:", &first_stable_min_chunks_spin));
+        fs_box.append(&label_row(
+            "Min consecutive chunks:",
+            &first_stable_min_chunks_spin,
+        ));
         fs_box.append(&first_stable_skip_unstable_check);
         delay_box.append(&fs_frame);
         let (ec_frame, ec_box) = framed_vbox("Early Cluster Settings", 4);
@@ -406,9 +450,12 @@ impl SimpleComponent for SettingsDialog {
         chapters_page.append(&snap_starts_only_check);
 
         // --- Tab 5: Post-Processing ---
-        let disable_track_stats_check = gtk::CheckButton::with_label("Disable track statistics tags");
-        let disable_header_compression_check = gtk::CheckButton::with_label("Disable header compression");
-        let apply_dialog_norm_check = gtk::CheckButton::with_label("Apply dialog normalization gain");
+        let disable_track_stats_check =
+            gtk::CheckButton::with_label("Disable track statistics tags");
+        let disable_header_compression_check =
+            gtk::CheckButton::with_label("Disable header compression");
+        let apply_dialog_norm_check =
+            gtk::CheckButton::with_label("Apply dialog normalization gain");
 
         let postprocess_page = gtk::Box::new(gtk::Orientation::Vertical, 6);
         postprocess_page.set_margin_all(12);
@@ -468,11 +515,22 @@ impl SimpleComponent for SettingsDialog {
         let widgets = view_output!();
 
         // Add tabs to notebook
-        widgets.notebook.append_page(&paths_page, Some(&gtk::Label::new(Some("Paths"))));
-        widgets.notebook.append_page(&logging_page, Some(&gtk::Label::new(Some("Logging"))));
-        widgets.notebook.append_page(&analysis_scroll, Some(&gtk::Label::new(Some("Analysis"))));
-        widgets.notebook.append_page(&chapters_page, Some(&gtk::Label::new(Some("Chapters"))));
-        widgets.notebook.append_page(&postprocess_page, Some(&gtk::Label::new(Some("Post-Processing"))));
+        widgets
+            .notebook
+            .append_page(&paths_page, Some(&gtk::Label::new(Some("Paths"))));
+        widgets
+            .notebook
+            .append_page(&logging_page, Some(&gtk::Label::new(Some("Logging"))));
+        widgets
+            .notebook
+            .append_page(&analysis_scroll, Some(&gtk::Label::new(Some("Analysis"))));
+        widgets
+            .notebook
+            .append_page(&chapters_page, Some(&gtk::Label::new(Some("Chapters"))));
+        widgets.notebook.append_page(
+            &postprocess_page,
+            Some(&gtk::Label::new(Some("Post-Processing"))),
+        );
 
         ComponentParts { model, widgets }
     }
@@ -548,63 +606,85 @@ impl SettingsDialog {
         self.compact_check.set_active(s.logging.compact);
         self.autoscroll_check.set_active(s.logging.autoscroll);
         self.archive_logs_check.set_active(s.logging.archive_logs);
-        self.show_options_pretty_check.set_active(s.logging.show_options_pretty);
-        self.show_options_json_check.set_active(s.logging.show_options_json);
+        self.show_options_pretty_check
+            .set_active(s.logging.show_options_pretty);
+        self.show_options_json_check
+            .set_active(s.logging.show_options_json);
         self.error_tail_spin.set_value(s.logging.error_tail as f64);
-        self.progress_step_spin.set_value(s.logging.progress_step as f64);
+        self.progress_step_spin
+            .set_value(s.logging.progress_step as f64);
 
         // Analysis
-        self.correlation_method_dropdown.set_selected(
-            enum_index(CorrelationMethod::all(), &s.analysis.correlation_method),
-        );
-        self.lang_source1_entry.set_text(
-            s.analysis.lang_source1.as_deref().unwrap_or(""),
-        );
-        self.lang_others_entry.set_text(
-            s.analysis.lang_others.as_deref().unwrap_or(""),
-        );
-        self.chunk_count_spin.set_value(s.analysis.chunk_count as f64);
-        self.chunk_duration_spin.set_value(s.analysis.chunk_duration as f64);
+        self.correlation_method_dropdown.set_selected(enum_index(
+            CorrelationMethod::all(),
+            &s.analysis.correlation_method,
+        ));
+        self.lang_source1_entry
+            .set_text(s.analysis.lang_source1.as_deref().unwrap_or(""));
+        self.lang_others_entry
+            .set_text(s.analysis.lang_others.as_deref().unwrap_or(""));
+        self.chunk_count_spin
+            .set_value(s.analysis.chunk_count as f64);
+        self.chunk_duration_spin
+            .set_value(s.analysis.chunk_duration as f64);
         self.scan_start_spin.set_value(s.analysis.scan_start_pct);
         self.scan_end_spin.set_value(s.analysis.scan_end_pct);
         self.min_match_pct_spin.set_value(s.analysis.min_match_pct);
-        self.min_accepted_chunks_spin.set_value(s.analysis.min_accepted_chunks as f64);
+        self.min_accepted_chunks_spin
+            .set_value(s.analysis.min_accepted_chunks as f64);
         self.use_soxr_check.set_active(s.analysis.use_soxr);
-        self.audio_peak_fit_check.set_active(s.analysis.audio_peak_fit);
-        self.filtering_method_dropdown.set_selected(
-            enum_index(FilteringMethod::all(), &s.analysis.filtering_method),
-        );
-        self.filter_low_spin.set_value(s.analysis.filter_low_cutoff_hz);
-        self.filter_high_spin.set_value(s.analysis.filter_high_cutoff_hz);
-        self.multi_corr_enabled_check.set_active(s.analysis.multi_correlation_enabled);
-        self.multi_corr_scc_check.set_active(s.analysis.multi_corr_scc);
-        self.multi_corr_gcc_phat_check.set_active(s.analysis.multi_corr_gcc_phat);
-        self.multi_corr_gcc_scot_check.set_active(s.analysis.multi_corr_gcc_scot);
-        self.multi_corr_whitened_check.set_active(s.analysis.multi_corr_whitened);
-        self.delay_selection_dropdown.set_selected(
-            enum_index(DelaySelectionMode::all(), &s.analysis.delay_selection_mode),
-        );
-        self.first_stable_min_chunks_spin.set_value(s.analysis.first_stable_min_chunks as f64);
-        self.first_stable_skip_unstable_check.set_active(s.analysis.first_stable_skip_unstable);
-        self.early_cluster_window_spin.set_value(s.analysis.early_cluster_window as f64);
-        self.early_cluster_threshold_spin.set_value(s.analysis.early_cluster_threshold as f64);
-        self.sync_mode_dropdown.set_selected(
-            enum_index(SyncMode::all(), &s.analysis.sync_mode),
-        );
+        self.audio_peak_fit_check
+            .set_active(s.analysis.audio_peak_fit);
+        self.filtering_method_dropdown.set_selected(enum_index(
+            FilteringMethod::all(),
+            &s.analysis.filtering_method,
+        ));
+        self.filter_low_spin
+            .set_value(s.analysis.filter_low_cutoff_hz);
+        self.filter_high_spin
+            .set_value(s.analysis.filter_high_cutoff_hz);
+        self.multi_corr_enabled_check
+            .set_active(s.analysis.multi_correlation_enabled);
+        self.multi_corr_scc_check
+            .set_active(s.analysis.multi_corr_scc);
+        self.multi_corr_gcc_phat_check
+            .set_active(s.analysis.multi_corr_gcc_phat);
+        self.multi_corr_gcc_scot_check
+            .set_active(s.analysis.multi_corr_gcc_scot);
+        self.multi_corr_whitened_check
+            .set_active(s.analysis.multi_corr_whitened);
+        self.delay_selection_dropdown.set_selected(enum_index(
+            DelaySelectionMode::all(),
+            &s.analysis.delay_selection_mode,
+        ));
+        self.first_stable_min_chunks_spin
+            .set_value(s.analysis.first_stable_min_chunks as f64);
+        self.first_stable_skip_unstable_check
+            .set_active(s.analysis.first_stable_skip_unstable);
+        self.early_cluster_window_spin
+            .set_value(s.analysis.early_cluster_window as f64);
+        self.early_cluster_threshold_spin
+            .set_value(s.analysis.early_cluster_threshold as f64);
+        self.sync_mode_dropdown
+            .set_selected(enum_index(SyncMode::all(), &s.analysis.sync_mode));
 
         // Chapters
         self.chapter_rename_check.set_active(s.chapters.rename);
         self.snap_enabled_check.set_active(s.chapters.snap_enabled);
-        self.snap_mode_dropdown.set_selected(
-            enum_index(SnapMode::all(), &s.chapters.snap_mode),
-        );
-        self.snap_threshold_spin.set_value(s.chapters.snap_threshold_ms as f64);
-        self.snap_starts_only_check.set_active(s.chapters.snap_starts_only);
+        self.snap_mode_dropdown
+            .set_selected(enum_index(SnapMode::all(), &s.chapters.snap_mode));
+        self.snap_threshold_spin
+            .set_value(s.chapters.snap_threshold_ms as f64);
+        self.snap_starts_only_check
+            .set_active(s.chapters.snap_starts_only);
 
         // Post-processing
-        self.disable_track_stats_check.set_active(s.postprocess.disable_track_stats_tags);
-        self.disable_header_compression_check.set_active(s.postprocess.disable_header_compression);
-        self.apply_dialog_norm_check.set_active(s.postprocess.apply_dialog_norm);
+        self.disable_track_stats_check
+            .set_active(s.postprocess.disable_track_stats_tags);
+        self.disable_header_compression_check
+            .set_active(s.postprocess.disable_header_compression);
+        self.apply_dialog_norm_check
+            .set_active(s.postprocess.apply_dialog_norm);
 
         // Update sensitivity for conditional fields
         self.update_sensitivity();
@@ -637,7 +717,11 @@ impl SettingsDialog {
         let lang1 = self.lang_source1_entry.text().to_string();
         s.analysis.lang_source1 = if lang1.is_empty() { None } else { Some(lang1) };
         let lang_o = self.lang_others_entry.text().to_string();
-        s.analysis.lang_others = if lang_o.is_empty() { None } else { Some(lang_o) };
+        s.analysis.lang_others = if lang_o.is_empty() {
+            None
+        } else {
+            Some(lang_o)
+        };
         s.analysis.chunk_count = self.chunk_count_spin.value() as u32;
         s.analysis.chunk_duration = self.chunk_duration_spin.value() as u32;
         s.analysis.scan_start_pct = self.scan_start_spin.value();
@@ -668,25 +752,20 @@ impl SettingsDialog {
         s.analysis.early_cluster_window = self.early_cluster_window_spin.value() as u32;
         s.analysis.early_cluster_threshold = self.early_cluster_threshold_spin.value() as u32;
         let sm_idx = self.sync_mode_dropdown.selected() as usize;
-        s.analysis.sync_mode = SyncMode::all()
-            .get(sm_idx)
-            .copied()
-            .unwrap_or_default();
+        s.analysis.sync_mode = SyncMode::all().get(sm_idx).copied().unwrap_or_default();
 
         // Chapters
         s.chapters.rename = self.chapter_rename_check.is_active();
         s.chapters.snap_enabled = self.snap_enabled_check.is_active();
         let snap_idx = self.snap_mode_dropdown.selected() as usize;
-        s.chapters.snap_mode = SnapMode::all()
-            .get(snap_idx)
-            .copied()
-            .unwrap_or_default();
+        s.chapters.snap_mode = SnapMode::all().get(snap_idx).copied().unwrap_or_default();
         s.chapters.snap_threshold_ms = self.snap_threshold_spin.value() as u32;
         s.chapters.snap_starts_only = self.snap_starts_only_check.is_active();
 
         // Post-processing
         s.postprocess.disable_track_stats_tags = self.disable_track_stats_check.is_active();
-        s.postprocess.disable_header_compression = self.disable_header_compression_check.is_active();
+        s.postprocess.disable_header_compression =
+            self.disable_header_compression_check.is_active();
         s.postprocess.apply_dialog_norm = self.apply_dialog_norm_check.is_active();
     }
 

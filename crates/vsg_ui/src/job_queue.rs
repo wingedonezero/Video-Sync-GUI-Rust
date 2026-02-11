@@ -23,9 +23,7 @@ use relm4::prelude::*;
 use vsg_core::jobs::{JobQueue, JobQueueEntry, JobQueueStatus};
 
 use crate::add_job_dialog::{AddJobDialog, AddJobMsg, AddJobOutput};
-use crate::manual_selection::{
-    ManualSelectionDialog, ManualSelectionMsg, ManualSelectionOutput,
-};
+use crate::manual_selection::{ManualSelectionDialog, ManualSelectionMsg, ManualSelectionOutput};
 
 /// Messages for the job queue dialog.
 #[derive(Debug)]
@@ -337,11 +335,8 @@ impl SimpleComponent for JobQueueDialog {
         let sender_drop = sender.input_sender().clone();
         drop_target.connect_drop(move |_target, value, _x, _y| {
             if let Ok(file_list) = value.get::<gdk::FileList>() {
-                let paths: Vec<PathBuf> = file_list
-                    .files()
-                    .iter()
-                    .filter_map(|f| f.path())
-                    .collect();
+                let paths: Vec<PathBuf> =
+                    file_list.files().iter().filter_map(|f| f.path()).collect();
                 if !paths.is_empty() {
                     sender_drop.emit(JobQueueMsg::OpenAddJobDialog(paths));
                     return true;
@@ -435,9 +430,7 @@ impl SimpleComponent for JobQueueDialog {
         let manual_selection_dialog = ManualSelectionDialog::builder()
             .launch(root.clone().upcast::<gtk::Window>())
             .forward(sender.input_sender(), |output| match output {
-                ManualSelectionOutput::Applied(layout) => {
-                    JobQueueMsg::LayoutApplied(layout)
-                }
+                ManualSelectionOutput::Applied(layout) => JobQueueMsg::LayoutApplied(layout),
                 ManualSelectionOutput::Log(msg) => JobQueueMsg::Log(msg),
             });
 
@@ -469,6 +462,11 @@ impl SimpleComponent for JobQueueDialog {
                 self.sensitivity_dirty.set(true);
             }
             JobQueueMsg::Close => {
+                // Match PySide behavior: closing/cancelling clears all jobs and layouts
+                self.queue.clear();
+                self.configuring_job_id = None;
+                self.refresh_list();
+                self.sensitivity_dirty.set(true);
                 self.visible = false;
             }
             JobQueueMsg::OpenAddJobDialog(paths) => {
@@ -538,10 +536,7 @@ impl SimpleComponent for JobQueueDialog {
                 let indices = self.selected_indices();
                 if let Some(&idx) = indices.first() {
                     if let Some(job) = self.queue.get(idx) {
-                        // Store which job we're configuring
                         self.configuring_job_id = Some(job.id.clone());
-
-                        // Open manual selection dialog with the job's sources
                         self.manual_selection_dialog.emit(ManualSelectionMsg::Show {
                             sources: job.sources.clone(),
                             previous_layout: job.layout.clone(),
@@ -554,9 +549,8 @@ impl SimpleComponent for JobQueueDialog {
                 let indices = self.selected_indices();
                 if let Some(&idx) = indices.first() {
                     if self.queue.copy_layout(idx) {
-                        let _ = sender.output(JobQueueOutput::Log(
-                            "Layout copied to clipboard.".into(),
-                        ));
+                        let _ = sender
+                            .output(JobQueueOutput::Log("Layout copied to clipboard.".into()));
                     } else {
                         let _ = sender.output(JobQueueOutput::Log(
                             "No layout to copy — job is not configured.".into(),
@@ -596,12 +590,8 @@ impl SimpleComponent for JobQueueDialog {
                 }
             }
             JobQueueMsg::StartProcessing => {
-                let ready: Vec<JobQueueEntry> = self
-                    .queue
-                    .jobs_ready()
-                    .into_iter()
-                    .cloned()
-                    .collect();
+                let ready: Vec<JobQueueEntry> =
+                    self.queue.jobs_ready().into_iter().cloned().collect();
                 if ready.is_empty() {
                     let _ = sender.output(JobQueueOutput::Log(
                         "No configured jobs ready for processing.".into(),
@@ -612,6 +602,10 @@ impl SimpleComponent for JobQueueDialog {
                     let _ = sender.output(JobQueueOutput::Log(format!(
                         "Starting processing of {count} job(s)..."
                     )));
+                    // Clear queue after extracting jobs, so reopening shows clean state
+                    self.queue.clear();
+                    self.configuring_job_id = None;
+                    self.refresh_list();
                     self.visible = false;
                 }
             }
