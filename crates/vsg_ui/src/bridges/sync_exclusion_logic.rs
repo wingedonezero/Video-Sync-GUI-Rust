@@ -89,15 +89,12 @@ impl ffi::SyncExclusionLogic {
             .unwrap_or("");
 
         if !subtitle_path.is_empty() {
-            match SubtitleData::get_style_counts_from_file(Path::new(subtitle_path)) {
-                Ok(counts) => {
-                    let total: usize = counts.values().sum();
-                    self.as_mut().set_total_events(total as i32);
-                    let styles: Vec<String> = counts.keys().cloned().collect();
-                    self.as_mut().rust_mut().original_style_list = styles;
-                    self.as_mut().rust_mut().style_counts = counts;
-                }
-                Err(_) => {}
+            if let Ok(counts) = SubtitleData::get_style_counts_from_file(Path::new(subtitle_path)) {
+                let total: usize = counts.values().sum();
+                self.as_mut().set_total_events(total as i32);
+                let styles: Vec<String> = counts.keys().cloned().collect();
+                self.as_mut().rust_mut().original_style_list = styles;
+                self.as_mut().rust_mut().style_counts = counts;
             }
         }
 

@@ -12,6 +12,7 @@
 import QtQuick 2.15
 import QtQuick.Controls 2.15
 import QtQuick.Layouts 1.15
+import QtQuick.Dialogs
 import QtQuick.Window 2.15
 import com.vsg.ui 1.0
 
@@ -26,12 +27,83 @@ ApplicationWindow {
     // The controller QObject handles all logic
     MainController {
         id: controller
+
+        onOpenDialogRequested: function(dialogName) {
+            switch (dialogName) {
+                case "OptionsDialog":
+                    optionsDialog.settingsJson = controller.get_settings_json()
+                    optionsDialog.open()
+                    break
+                case "JobQueueDialog":
+                    jobQueueDialog.open()
+                    break
+                case "BatchCompletionDialog":
+                    batchCompletionDialog.open()
+                    break
+            }
+        }
+
+        onWorkerStartRequested: function(jobsJson, andMerge, outputDir, settingsJson) {
+            // Worker runs in a background thread via the runner module.
+            // The QML side handles signal routing from WorkerSignals.
+            controller.set_status_text("Worker started...")
+        }
     }
+
+    Component.onCompleted: controller.initialize()
 
     onClosing: function(close) {
         controller.on_close()
         close.accepted = true
     }
+
+    // ── Dialogs ──
+
+    OptionsDialog {
+        id: optionsDialog
+        onAccepted: {
+            controller.update_settings_from_json(JSON.stringify(optionsDialog.collectSettings()))
+        }
+    }
+
+    JobQueueDialog {
+        id: jobQueueDialog
+        tempRoot: {
+            var settings = JSON.parse(controller.get_settings_json())
+            return settings.temp_root || ""
+        }
+        onAccepted: {
+            var finalJobsJson = jobQueueDialog.getFinalJobs()
+            var jobs = JSON.parse(finalJobsJson)
+            if (jobs.length > 0) {
+                // Determine output dir from settings
+                var settings = JSON.parse(controller.get_settings_json())
+                var outputDir = settings.output_folder || "sync_output"
+                controller.workerStartRequested(finalJobsJson, true, outputDir, controller.get_settings_json())
+            }
+        }
+    }
+
+    BatchCompletionDialog {
+        id: batchCompletionDialog
+    }
+
+    // File dialogs for Browse buttons
+    FileDialog {
+        id: browseDialog
+        property int sourceIndex: 0
+        title: "Select File or Directory"
+        onAccepted: {
+            var path = selectedFile.toString().replace("file://", "")
+            switch (sourceIndex) {
+                case 1: controller.ref_path = path; break
+                case 2: controller.sec_path = path; break
+                case 3: controller.ter_path = path; break
+            }
+        }
+    }
+
+    // ── Main Layout ──
 
     ColumnLayout {
         anchors.fill: parent
@@ -62,6 +134,7 @@ ApplicationWindow {
                     font.pixelSize: 14
                     padding: 5
                     Layout.fillWidth: true
+                    enabled: !controller.worker_running
                     onClicked: controller.open_job_queue()
                 }
 
@@ -85,10 +158,7 @@ ApplicationWindow {
                 // Source 1 (Reference)
                 RowLayout {
                     spacing: 4
-                    Label {
-                        text: "Source 1 (Reference):"
-                        Layout.preferredWidth: 140
-                    }
+                    Label { text: "Source 1 (Reference):"; Layout.preferredWidth: 140 }
                     TextField {
                         text: controller.ref_path
                         onTextChanged: controller.ref_path = text
@@ -96,17 +166,14 @@ ApplicationWindow {
                     }
                     Button {
                         text: "Browse…"
-                        onClicked: controller.browse_for_path(1)
+                        onClicked: { browseDialog.sourceIndex = 1; browseDialog.open() }
                     }
                 }
 
                 // Source 2
                 RowLayout {
                     spacing: 4
-                    Label {
-                        text: "Source 2:"
-                        Layout.preferredWidth: 140
-                    }
+                    Label { text: "Source 2:"; Layout.preferredWidth: 140 }
                     TextField {
                         text: controller.sec_path
                         onTextChanged: controller.sec_path = text
@@ -114,17 +181,14 @@ ApplicationWindow {
                     }
                     Button {
                         text: "Browse…"
-                        onClicked: controller.browse_for_path(2)
+                        onClicked: { browseDialog.sourceIndex = 2; browseDialog.open() }
                     }
                 }
 
                 // Source 3
                 RowLayout {
                     spacing: 4
-                    Label {
-                        text: "Source 3:"
-                        Layout.preferredWidth: 140
-                    }
+                    Label { text: "Source 3:"; Layout.preferredWidth: 140 }
                     TextField {
                         text: controller.ter_path
                         onTextChanged: controller.ter_path = text
@@ -132,7 +196,7 @@ ApplicationWindow {
                     }
                     Button {
                         text: "Browse…"
-                        onClicked: controller.browse_for_path(3)
+                        onClicked: { browseDialog.sourceIndex = 3; browseDialog.open() }
                     }
                 }
 
@@ -141,6 +205,7 @@ ApplicationWindow {
                     Item { Layout.fillWidth: true }
                     Button {
                         text: "Analyze Only"
+                        enabled: !controller.worker_running
                         onClicked: controller.start_analyze_only()
                     }
                 }

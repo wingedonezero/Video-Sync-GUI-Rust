@@ -76,6 +76,7 @@ struct FontReplacement {
     font_path: String,
 }
 
+#[derive(Default)]
 pub struct FontManagerLogicRust {
     replacement_count: i32,
     replacements: Vec<FontReplacement>,
@@ -83,16 +84,6 @@ pub struct FontManagerLogicRust {
     fonts_dir: String,
 }
 
-impl Default for FontManagerLogicRust {
-    fn default() -> Self {
-        Self {
-            replacement_count: 0,
-            replacements: Vec::new(),
-            subtitle_path: String::new(),
-            fonts_dir: String::new(),
-        }
-    }
-}
 
 impl ffi::FontManagerLogic {
     fn initialize(mut self: Pin<&mut Self>, data_json: QString) {

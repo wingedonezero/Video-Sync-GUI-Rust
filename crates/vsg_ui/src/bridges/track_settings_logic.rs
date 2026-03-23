@@ -54,7 +54,6 @@ pub mod ffi {
 }
 
 use core::pin::Pin;
-use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 
 pub struct TrackSettingsLogicRust {

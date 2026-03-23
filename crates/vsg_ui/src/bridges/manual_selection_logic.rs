@@ -87,6 +87,7 @@ use std::collections::HashMap;
 use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 
+#[derive(Default)]
 pub struct ManualSelectionLogicRust {
     layout_track_count: i32,
     track_info: HashMap<String, Vec<serde_json::Value>>,
@@ -95,17 +96,6 @@ pub struct ManualSelectionLogicRust {
     source_settings: HashMap<String, serde_json::Value>,
 }
 
-impl Default for ManualSelectionLogicRust {
-    fn default() -> Self {
-        Self {
-            layout_track_count: 0,
-            track_info: HashMap::new(),
-            layout_tracks: Vec::new(),
-            attachment_sources: Vec::new(),
-            source_settings: HashMap::new(),
-        }
-    }
-}
 
 impl ffi::ManualSelectionLogic {
     fn initialize(
