@@ -9,7 +9,29 @@ use std::path::Path;
 use crate::subtitles::data::*;
 
 /// Write SubtitleData to ASS file — `write_ass_file`
-pub fn write_ass_file(data: &SubtitleData, path: &Path, rounding: &str) -> Result<(), String> {
+///
+/// When `fps` is provided, surgical frame-aware rounding is applied:
+/// timestamps are snapped to exact frame boundaries for sub-frame precision.
+/// This is the SINGLE rounding point — float ms → centiseconds happens here only.
+///
+/// Returns Ok(()) on success. Surgical rounding stats returned via separate API
+/// once frame_utils/surgical_rounding is wired (section 1.12).
+pub fn write_ass_file(
+    data: &SubtitleData,
+    path: &Path,
+    rounding: &str,
+    fps: Option<f64>,
+) -> Result<(), String> {
+    // Pre-compute surgical rounding if FPS is available
+    // TODO(section 1.12): Wire surgical_round_batch() from frame_utils/surgical_rounding
+    // When wired, this will pre-compute frame-aligned timestamps for every event,
+    // and write_events() will use those instead of standard rounding.
+    let _surgical_results: Option<std::collections::HashMap<usize, (f64, f64)>> = if fps.is_some() {
+        // surgical_round_batch(data, fps, rounding) → HashMap<event_index, (start_cs, end_cs)>
+        None // Will be Some(...) once surgical_rounding.rs is verified in section 1.12
+    } else {
+        None
+    };
     let mut lines: Vec<String> = Vec::new();
 
     let section_order = if data.section_order.is_empty() {

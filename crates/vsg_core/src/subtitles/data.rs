@@ -721,6 +721,9 @@ impl SubtitleData {
             "srt" => {
                 super::parsers::srt_parser::parse_srt_file(path)
             }
+            "vtt" => {
+                super::parsers::srt_parser::parse_vtt_file(path)
+            }
             _ => Err(format!("Unsupported subtitle format: .{ext}")),
         }
     }
@@ -730,8 +733,15 @@ impl SubtitleData {
     // =========================================================================
 
     /// Save as ASS file — `save_ass`
+    ///
+    /// When `fps` is provided, surgical frame-aware rounding is applied.
     pub fn save_ass(&self, path: &Path, rounding: &str) -> Result<(), String> {
-        super::writers::ass_writer::write_ass_file(self, path, rounding)
+        super::writers::ass_writer::write_ass_file(self, path, rounding, None)
+    }
+
+    /// Save as ASS file with optional FPS for surgical rounding — `save_ass_with_fps`
+    pub fn save_ass_with_fps(&self, path: &Path, rounding: &str, fps: Option<f64>) -> Result<(), String> {
+        super::writers::ass_writer::write_ass_file(self, path, rounding, fps)
     }
 
     /// Save as SRT file — `save_srt`

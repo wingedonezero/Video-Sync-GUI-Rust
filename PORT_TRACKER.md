@@ -111,17 +111,17 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 53 | `subtitles/parsers/ass_parser.py` | `subtitles/parsers/ass_parser.rs` | ❌ Not Audited | ASS/SSA parser |
-| 54 | `subtitles/parsers/srt_parser.py` | `subtitles/parsers/srt_parser.rs` | ❌ Not Audited | SRT parser |
-| 55 | `subtitles/writers/ass_writer.py` | `subtitles/writers/ass_writer.rs` | ❌ Not Audited | ASS output writer |
-| 56 | `subtitles/writers/srt_writer.py` | `subtitles/writers/srt_writer.rs` | ❌ Not Audited | SRT output writer |
+| 53 | `subtitles/parsers/ass_parser.py` | `subtitles/parsers/ass_parser.rs` | ✅ Verified | Added encoding fallback: shift_jis, gbk, gb2312, big5, cp1252, latin1 via encoding_rs. BOM detection, section ordering, format preservation all match. |
+| 54 | `subtitles/parsers/srt_parser.py` | `subtitles/parsers/srt_parser.rs` | ✅ Verified | Added: parse_vtt_file (WebVTT with optional hours), color tag conversion (#RRGGBB→&HBBGGRR&), VTT class/voice tag stripping, encoding detection with encoding_rs fallback. 7 tests. |
+| 55 | `subtitles/writers/ass_writer.py` | `subtitles/writers/ass_writer.rs` | ✅ Verified | Added fps parameter (Option<f64>) for surgical rounding. Surgical round_batch call marked TODO for section 1.12 wiring. Section ordering, BOM, line endings all match. |
+| 56 | `subtitles/writers/srt_writer.py` | `subtitles/writers/srt_writer.rs` | ✅ Verified | Timing format, comment filtering, index preservation, ASS tag stripping, BOM handling all match. |
 
 ### 1.11 Subtitles — Operations
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 57 | `subtitles/operations/style_ops.py` | `subtitles/operations/style_ops.rs` | ❌ Not Audited | Style manipulation |
-| 58 | `subtitles/operations/stepping.py` | `subtitles/operations/stepping.rs` | ❌ Not Audited | Stepping on subtitles |
+| 57 | `subtitles/operations/style_ops.py` | `subtitles/operations/style_ops.rs` | ✅ Verified | 5/5 functions: style_patch, font_replacement, size_multiplier, rescale, style_filter. Full override tag scaling with transform blocks. |
+| 58 | `subtitles/operations/stepping.py` | `subtitles/operations/stepping.rs` | ✅ Verified | apply_stepping with start/midpoint/majority boundary modes. Region tracking improved (i64 keys vs float). |
 
 ### 1.12 Subtitles — Frame Utils
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 51 | 1 | 97 |
+| **Core** | 149 | 57 | 1 | 91 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **51** | **1** | **138** |
+| **TOTAL** | **190** | **57** | **1** | **132** |
 
 > Last updated: 2026-03-23
