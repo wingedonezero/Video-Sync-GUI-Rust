@@ -17,6 +17,7 @@ tracing-subscriber = { workspace = true }
 tracing-appender = { workspace = true }
 chrono = { workspace = true }
 parking_lot = { workspace = true }
+roxmltree = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
