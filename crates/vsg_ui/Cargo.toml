@@ -14,6 +14,7 @@ path = "src/main.rs"
 vsg_core = { path = "../vsg_core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+which = "7"
 
 # CXX-Qt bindings
 cxx = "1.0.95"

@@ -64,6 +64,15 @@ pub mod ffi {
         #[qinvokable]
         fn get_final_jobs(self: Pin<&mut JobQueueLogic>) -> QString;
 
+        /// Get track info for a job (calls mkvmerge/ffprobe). Returns JSON or empty.
+        #[qinvokable]
+        fn get_track_info_for_job(self: Pin<&mut JobQueueLogic>, row: i32) -> QString;
+
+        /// Configure a job at a row — returns existing layout data JSON for dialog prepopulation.
+        /// QML uses this to open ManualSelectionDialog with the right data.
+        #[qinvokable]
+        fn get_configure_data(self: Pin<&mut JobQueueLogic>, row: i32) -> QString;
+
         /// Clean up all temporary layout files.
         #[qinvokable]
         fn cleanup_all(self: Pin<&mut JobQueueLogic>);
@@ -446,6 +455,88 @@ impl ffi::JobQueueLogic {
         }
 
         let json = serde_json::to_string(&final_jobs).unwrap_or_else(|_| "[]".to_string());
+        QString::from(json.as_str())
+    }
+
+    fn get_track_info_for_job(self: Pin<&mut Self>, row: i32) -> QString {
+        let idx = row as usize;
+        if idx >= self.rust().jobs.len() {
+            return QString::from("{}");
+        }
+
+        let job = &self.rust().jobs[idx];
+
+        // Check cache
+        if let Some(cached) = job.get("track_info") {
+            if !cached.is_null() {
+                let json = serde_json::to_string(cached).unwrap_or_default();
+                return QString::from(json.as_str());
+            }
+        }
+
+        // Build tool paths from system PATH
+        let sources = get_sources(job);
+        let tool_names = ["mkvmerge", "mkvextract", "ffmpeg", "ffprobe"];
+        let tool_paths: HashMap<String, String> = tool_names
+            .iter()
+            .filter_map(|&name| {
+                which::which(name)
+                    .ok()
+                    .map(|p| (name.to_string(), p.to_string_lossy().to_string()))
+            })
+            .collect();
+
+        // Create a runner with default settings for track probing
+        let settings = vsg_core::models::settings::AppSettings::default();
+        let log_cb: Box<dyn Fn(&str) + Send + Sync> = Box::new(|_| {});
+        let runner = vsg_core::io::runner::CommandRunner::new(settings, log_cb);
+
+        let info = vsg_core::extraction::tracks::get_track_info_for_dialog(
+            &sources, &runner, &tool_paths,
+        );
+        let json = serde_json::to_string(&info).unwrap_or_else(|_| "{}".to_string());
+        QString::from(json.as_str())
+    }
+
+    fn get_configure_data(self: Pin<&mut Self>, row: i32) -> QString {
+        let idx = row as usize;
+        if idx >= self.rust().jobs.len() {
+            return QString::from("{}");
+        }
+
+        let sources = get_sources(&self.rust().jobs[idx]);
+
+        // Load existing layout if any
+        let mut result = serde_json::json!({
+            "sources": sources,
+        });
+
+        if let Some(lm) = &self.rust().layout_manager {
+            let job_id = lm.generate_job_id(&sources);
+            if let Some(layout_data) = lm.load_job_layout(&job_id) {
+                // Convert enhanced_layout to dialog format (sorted by user_order_index)
+                if let Some(enhanced) = layout_data.get("enhanced_layout") {
+                    let mut items: Vec<serde_json::Value> = enhanced
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
+                    items.sort_by_key(|item| {
+                        item.get("user_order_index")
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0)
+                    });
+                    result["previous_layout"] = serde_json::json!(items);
+                }
+                if let Some(att) = layout_data.get("attachment_sources") {
+                    result["previous_attachments"] = att.clone();
+                }
+                if let Some(ss) = layout_data.get("source_settings") {
+                    result["previous_source_settings"] = ss.clone();
+                }
+            }
+        }
+
+        let json = serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string());
         QString::from(json.as_str())
     }
 

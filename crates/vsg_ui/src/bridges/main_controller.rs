@@ -58,6 +58,17 @@ pub mod ffi {
         #[qinvokable]
         fn update_settings_from_json(self: Pin<&mut MainController>, json: QString);
 
+        /// Actually start the worker on a background thread.
+        /// Called from QML after worker_start_requested.
+        #[qinvokable]
+        fn start_worker(
+            self: Pin<&mut MainController>,
+            jobs_json: QString,
+            and_merge: bool,
+            output_dir: QString,
+            settings_json: QString,
+        );
+
         /// Handle a worker's finished_job result (JSON).
         #[qinvokable]
         fn handle_job_finished(self: Pin<&mut MainController>, result_json: QString);
@@ -119,6 +130,7 @@ pub struct MainControllerRust {
     // Internal state (not exposed to QML)
     config: Option<AppConfig>,
     job_counter: i32,
+    worker_cancelled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
 impl Default for MainControllerRust {
@@ -137,6 +149,7 @@ impl Default for MainControllerRust {
             worker_running: false,
             config: None,
             job_counter: 0,
+            worker_cancelled: None,
         }
     }
 }
@@ -383,9 +396,63 @@ impl ffi::MainController {
 
     /// Save config and clean up on close — 1:1 port of `controller.py::on_close`.
     fn on_close(mut self: Pin<&mut Self>) {
+        // Cancel running worker if any
+        if let Some(cancelled) = &self.rust().worker_cancelled {
+            cancelled.store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         self.as_mut().save_ui_to_config();
         self.as_mut()
             .append_log("[SHUTDOWN] Saving configuration...");
+    }
+
+    /// Actually start the worker on a background thread.
+    fn start_worker(
+        mut self: Pin<&mut Self>,
+        jobs_json: QString,
+        and_merge: bool,
+        output_dir: QString,
+        settings_json: QString,
+    ) {
+        use crate::worker::runner::{JobRunnerConfig, SignalCallbacks};
+        use std::sync::atomic::AtomicBool;
+        use std::sync::Arc;
+
+        let settings: vsg_core::models::settings::AppSettings =
+            serde_json::from_str(&settings_json.to_string()).unwrap_or_default();
+
+        let jobs: Vec<std::collections::HashMap<String, serde_json::Value>> =
+            serde_json::from_str(&jobs_json.to_string()).unwrap_or_default();
+
+        let cancelled = Arc::new(AtomicBool::new(false));
+        self.as_mut().rust_mut().worker_cancelled = Some(Arc::clone(&cancelled));
+
+        let config = JobRunnerConfig {
+            settings,
+            jobs,
+            and_merge,
+            output_dir: output_dir.to_string(),
+            cancelled,
+        };
+
+        // For now, signals are no-ops (TODO: wire Qt signals back via thread-safe channel)
+        // In a full implementation, these closures would send messages back to the
+        // main thread via a channel or Qt event, which the controller would poll/receive.
+        let callbacks = SignalCallbacks {
+            log: Box::new(|_msg| {}),
+            progress: Box::new(|_pct| {}),
+            status: Box::new(|_msg| {}),
+            finished_job: Box::new(|_json| {}),
+            finished_all: Box::new(|_json| {}),
+        };
+
+        // Spawn background thread
+        std::thread::spawn(move || {
+            crate::worker::runner::run_job_batch(config, callbacks);
+        });
+
+        self.as_mut().set_worker_running(true);
+        self.as_mut()
+            .append_log("[WORKER] Background worker thread started.");
     }
 
     // ── Internal helpers ──
