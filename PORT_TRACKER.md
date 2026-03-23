@@ -60,7 +60,7 @@ Python: 149 files | Rust: 148 files
 | 24 | `analysis/correlation/filtering.py` | `analysis/correlation/filtering.rs` | ✅ Verified | 2/2 main + 3 helpers. scipy replaced with native butterworth/firwin/lfilter. |
 | 25 | `analysis/correlation/confidence.py` | `analysis/correlation/confidence.rs` | ✅ Verified | 1/1 function. numpy→manual median/percentile/std. Same formula. |
 | 26 | `analysis/correlation/registry.py` | `analysis/correlation/registry.rs` | ✅ Verified | 3/3 functions. Protocol→Trait. Global Mutex HashMap. |
-| 27 | `analysis/correlation/gpu_backend.py` | `analysis/correlation/gpu_backend.rs` | ⚠️ Gaps Found | 3/5 functions. Missing: get_spectrogram_transform, get_mel_spectrogram_transform (torchaudio not in tch — only used by onset method). cleanup_gpu simplified. |
+| 27 | `analysis/correlation/gpu_backend.py` | `analysis/correlation/gpu_backend.rs` | ✅ Verified | 5/5 functions. spectrogram() via tch STFT + abs, mel_spectrogram() via triangular filterbank. Hann window cached. cleanup_gpu clears caches + synchronize. |
 | 28 | `analysis/correlation/gpu_correlation.py` | `analysis/correlation/gpu_correlation.rs` | ✅ Verified | 5/5 functions. tch tensor ops match torch Python. |
 
 ### 1.6 Analysis — Correlation Methods
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 26 | 2 | 121 |
+| **Core** | 149 | 27 | 1 | 121 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **26** | **2** | **162** |
+| **TOTAL** | **190** | **27** | **1** | **162** |
 
 > Last updated: 2026-03-23
