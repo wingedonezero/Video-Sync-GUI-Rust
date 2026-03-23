@@ -77,7 +77,7 @@ fn get_quality_thresholds(settings: &AppSettings) -> QualityThresholds {
 /// Simple DBSCAN implementation — replaces sklearn.cluster.DBSCAN
 ///
 /// Returns cluster labels for each point (-1 = noise).
-fn dbscan_1d(values: &[f64], eps: f64, min_samples: usize) -> Vec<i32> {
+pub fn dbscan_1d(values: &[f64], eps: f64, min_samples: usize) -> Vec<i32> {
     let n = values.len();
     let mut labels = vec![-1i32; n];
     let mut cluster_id = 0i32;
