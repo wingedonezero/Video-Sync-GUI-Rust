@@ -14,12 +14,12 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 1 | `models/settings.py` | `models/settings.rs` | ❌ Not Audited | AppSettings, all fields |
-| 2 | `models/jobs.py` | `models/jobs.rs` | ❌ Not Audited | PipelineResult, JobContext |
+| 1 | `models/settings.py` | `models/settings.rs` | ✅ Verified | 172/172 fields match, all defaults match, 6 tests pass. Pydantic→serde. |
+| 2 | `models/jobs.py` | `models/jobs.rs` | ✅ Verified | Delays 4/4, PlanItem 33/33, MergePlan 5/5, PipelineResult 11/11. All fields match. status uses String not enum (worker compat). |
 | 3 | `models/context_types.py` | `models/context_types.rs` | ❌ Not Audited | ManualLayoutItem, type aliases |
 | 4 | `models/converters.py` | `models/converters.rs` | ❌ Not Audited | Setting type conversions |
 | 5 | `models/media.py` | `models/media.rs` | ❌ Not Audited | MediaInfo types |
-| 6 | `models/types.py` | `models/enums.rs` | ❌ Not Audited | Enums, shared types |
+| 6 | `models/types.py` | `models/enums.rs` | ✅ Verified | 25/25 Literal types match as Rust enums. All serde renames match Python strings. +1 extra JobStatus enum (from jobs.py). |
 | 7 | `config.py` | `config.rs` | ❌ Not Audited | AppConfig, paths, JSON→TOML migration |
 
 ### 1.2 IO & Discovery
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 0 | 0 | 149 |
+| **Core** | 149 | 3 | 0 | 146 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **0** | **0** | **190** |
+| **TOTAL** | **190** | **3** | **0** | **187** |
 
 > Last updated: 2026-03-23
