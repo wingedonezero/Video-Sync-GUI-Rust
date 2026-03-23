@@ -1,3 +1,4 @@
+pub mod analysis;
 pub mod chapters;
 pub mod config;
 pub mod extraction;
