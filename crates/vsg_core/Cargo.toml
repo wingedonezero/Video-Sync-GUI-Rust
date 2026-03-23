@@ -21,6 +21,7 @@ which = { workspace = true }
 once_cell = { workspace = true }
 regex = { workspace = true }
 sha2 = { workspace = true }
+md-5 = { workspace = true }
 tch = { workspace = true }
 ndarray = { workspace = true }
 rustfft = { workspace = true }
