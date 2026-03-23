@@ -54,14 +54,14 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 21 | `analysis/correlation/run.py` | `analysis/correlation/run.rs` | ❌ Not Audited | Main correlation entry |
-| 22 | `analysis/correlation/decode.py` | `analysis/correlation/decode.rs` | ❌ Not Audited | Audio decode to PCM |
-| 23 | `analysis/correlation/dense.py` | `analysis/correlation/dense.rs` | ❌ Not Audited | Dense sliding window |
-| 24 | `analysis/correlation/filtering.py` | `analysis/correlation/filtering.rs` | ❌ Not Audited | Pre-correlation filtering |
-| 25 | `analysis/correlation/confidence.py` | `analysis/correlation/confidence.rs` | ❌ Not Audited | Match confidence scoring |
-| 26 | `analysis/correlation/registry.py` | `analysis/correlation/registry.rs` | ❌ Not Audited | Method registry |
-| 27 | `analysis/correlation/gpu_backend.py` | `analysis/correlation/gpu_backend.rs` | ❌ Not Audited | GPU via tch-rs |
-| 28 | `analysis/correlation/gpu_correlation.py` | `analysis/correlation/gpu_correlation.rs` | ❌ Not Audited | GPU correlation entry |
+| 21 | `analysis/correlation/run.py` | `analysis/correlation/run.rs` | ✅ Verified | 1/1 function. Registry lookup with SCC fallback. |
+| 22 | `analysis/correlation/decode.py` | `analysis/correlation/decode.rs` | ✅ Verified | 3/3 functions + lang2to3 helper. PCM decode via ffmpeg. |
+| 23 | `analysis/correlation/dense.py` | `analysis/correlation/dense.rs` | ✅ Verified | Core loop + ALL summary logging added: classify_result (5 categories), log_dense_summary (full stats), log_cluster_analysis (DBSCAN + transitions), fmt_time. ~370 lines added. |
+| 24 | `analysis/correlation/filtering.py` | `analysis/correlation/filtering.rs` | ✅ Verified | 2/2 main + 3 helpers. scipy replaced with native butterworth/firwin/lfilter. |
+| 25 | `analysis/correlation/confidence.py` | `analysis/correlation/confidence.rs` | ✅ Verified | 1/1 function. numpy→manual median/percentile/std. Same formula. |
+| 26 | `analysis/correlation/registry.py` | `analysis/correlation/registry.rs` | ✅ Verified | 3/3 functions. Protocol→Trait. Global Mutex HashMap. |
+| 27 | `analysis/correlation/gpu_backend.py` | `analysis/correlation/gpu_backend.rs` | ⚠️ Gaps Found | 3/5 functions. Missing: get_spectrogram_transform, get_mel_spectrogram_transform (torchaudio not in tch — only used by onset method). cleanup_gpu simplified. |
+| 28 | `analysis/correlation/gpu_correlation.py` | `analysis/correlation/gpu_correlation.rs` | ✅ Verified | 5/5 functions. tch tensor ops match torch Python. |
 
 ### 1.6 Analysis — Correlation Methods
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 19 | 1 | 129 |
+| **Core** | 149 | 26 | 2 | 121 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **19** | **1** | **170** |
+| **TOTAL** | **190** | **26** | **2** | **162** |
 
 > Last updated: 2026-03-23
