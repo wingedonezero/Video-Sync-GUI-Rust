@@ -67,12 +67,12 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 29 | `analysis/correlation/methods/scc.py` | `analysis/correlation/methods/scc.rs` | ❌ Not Audited | Standard cross-correlation |
-| 30 | `analysis/correlation/methods/gcc_phat.py` | `analysis/correlation/methods/gcc_phat.rs` | ❌ Not Audited | GCC-PHAT |
-| 31 | `analysis/correlation/methods/gcc_scot.py` | `analysis/correlation/methods/gcc_scot.rs` | ❌ Not Audited | GCC-SCOT |
-| 32 | `analysis/correlation/methods/gcc_whiten.py` | `analysis/correlation/methods/gcc_whiten.rs` | ❌ Not Audited | Whitened GCC |
-| 33 | `analysis/correlation/methods/onset.py` | `analysis/correlation/methods/onset.rs` | ❌ Not Audited | Onset detection |
-| 34 | `analysis/correlation/methods/spectrogram.py` | `analysis/correlation/methods/spectrogram.rs` | ❌ Not Audited | Spectrogram method |
+| 29 | `analysis/correlation/methods/scc.py` | `analysis/correlation/methods/scc.rs` | ✅ Verified | FFT→cross-multiply→IFFT→peak. Normalize, parabolic fit, confidence. Algorithm identical. |
+| 30 | `analysis/correlation/methods/gcc_phat.py` | `analysis/correlation/methods/gcc_phat.rs` | ✅ Verified | FFT→PHAT weighting (÷|G|)→bandpass→IFFT→PSR confidence. Algorithm identical. |
+| 31 | `analysis/correlation/methods/gcc_scot.py` | `analysis/correlation/methods/gcc_scot.rs` | ✅ Verified | FFT→SCOT weighting (÷sqrt(Rp*Tp))→bandpass→IFFT→PSR. Algorithm identical. |
+| 32 | `analysis/correlation/methods/gcc_whiten.py` | `analysis/correlation/methods/gcc_whiten.rs` | ✅ Verified | FFT→per-spectrum whitening→bandpass→cross-multiply→IFFT→PSR. Algorithm identical. |
+| 33 | `analysis/correlation/methods/onset.py` | `analysis/correlation/methods/onset.rs` | ✅ Verified | Spectrogram→spectral flux→ReLU→normalize→GCC-PHAT on envelopes. Uses gpu_backend::spectrogram(). |
+| 34 | `analysis/correlation/methods/spectrogram.py` | `analysis/correlation/methods/spectrogram.rs` | ✅ Verified | Mel spectrogram→dB→normalize→collapse→GCC-PHAT. Rust implements mel filterbank from scratch (correct). |
 
 ### 1.7 Correction
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 27 | 1 | 121 |
+| **Core** | 149 | 33 | 1 | 115 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **27** | **1** | **162** |
+| **TOTAL** | **190** | **33** | **1** | **156** |
 
 > Last updated: 2026-03-23
