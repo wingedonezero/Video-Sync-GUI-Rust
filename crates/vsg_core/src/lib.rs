@@ -15,3 +15,4 @@ pub mod pipeline;
 pub mod pipeline_components;
 pub mod postprocess;
 pub mod reporting;
+pub mod subtitles;

@@ -1,0 +1,14 @@
+//! Unified subtitle processing system — 1:1 port of `vsg_core/subtitles/`.
+//!
+//! Provides:
+//! - SubtitleData: Universal container for all subtitle formats
+//! - SubtitleEditPlan: Non-destructive edit plan system
+//! - Parsers for ASS, SRT formats
+//! - Writers for ASS, SRT formats
+//! - Operations: sync, stepping, style modifications
+//! - Frame utilities for video-verified sync
+//! - OCR system (VobSub parser, pipeline, model backends stubbed)
+
+pub mod data;
+pub mod parsers;
+pub mod writers;
