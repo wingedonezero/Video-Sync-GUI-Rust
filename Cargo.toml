@@ -39,7 +39,10 @@ parking_lot = "0.12.5"
 rustfft = "6.4.1"
 
 # GPU / PyTorch (libtorch C++ bindings)
-tch = "0.23.0"
+# download-libtorch: auto-downloads libtorch during build (like any cargo dep)
+# For ROCm GPU: set TORCH_CUDA_VERSION=rocm7.1 before building
+# Without that env var, downloads CPU version (still compiles, just no GPU accel)
+tch = { version = "0.23.0", features = ["download-libtorch"] }
 
 # Numerical arrays
 ndarray = "0.17.2"
