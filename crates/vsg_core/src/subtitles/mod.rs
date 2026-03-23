@@ -12,3 +12,14 @@
 pub mod data;
 pub mod parsers;
 pub mod writers;
+
+pub mod checkpoint_selection;
+pub mod diagnostics;
+pub mod edit_plan;
+pub mod operations;
+pub mod style_engine;
+pub mod sync_dispatcher;
+pub mod sync_mode_plugins;
+pub mod sync_modes;
+pub mod sync_utils;
+pub mod track_processor;
