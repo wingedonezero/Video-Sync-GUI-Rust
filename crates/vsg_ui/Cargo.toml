@@ -14,3 +14,11 @@ path = "src/main.rs"
 vsg_core = { path = "../vsg_core" }
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# CXX-Qt bindings
+cxx = "1.0.95"
+cxx-qt = "0.8.1"
+cxx-qt-lib = { version = "0.8.1", features = ["qt_full"] }
+
+[build-dependencies]
+cxx-qt-build = { version = "0.8.1", features = ["link_qt_object_files"] }

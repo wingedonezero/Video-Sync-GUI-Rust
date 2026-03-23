@@ -800,6 +800,16 @@ impl SubtitleData {
         counts
     }
 
+    /// Quick static method to get style counts from a file path without
+    /// keeping the full SubtitleData in memory.
+    ///
+    /// 1:1 port of Python's `SubtitleData.get_style_counts_from_file(path)`.
+    /// Used by UI validation dialogs that only need style enumeration.
+    pub fn get_style_counts_from_file(path: &Path) -> Result<HashMap<String, usize>, String> {
+        let data = Self::from_file(path)?;
+        Ok(data.get_style_counts())
+    }
+
     /// Get (min_start_ms, max_end_ms) — `get_timing_range`
     pub fn get_timing_range(&self) -> (f64, f64) {
         if self.events.is_empty() {

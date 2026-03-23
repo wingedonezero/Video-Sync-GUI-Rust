@@ -11,6 +11,7 @@ pub mod favorite_colors;
 pub mod font_manager;
 pub mod io;
 pub mod job_discovery;
+pub mod job_layouts;
 pub mod models;
 pub mod mux;
 pub mod orchestrator;
