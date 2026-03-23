@@ -289,7 +289,10 @@ pub fn diagnose_audio_issue(
         }
 
         // Build cluster diagnostics
-        let cluster_details = build_cluster_diagnostics(&accepted, &cluster_members);
+        let verbose = settings.stepping_diagnostics_verbose;
+        let cluster_details = build_cluster_diagnostics(
+            &accepted, &cluster_members, verbose, &|msg| runner.log_message(msg),
+        );
 
         // Decide based on correction mode
         match correction_mode.as_str() {
@@ -377,10 +380,105 @@ pub fn diagnose_audio_issue(
     }
 }
 
-/// Build cluster diagnostics — `_build_cluster_diagnostics`
+/// Format chunk numbers as ranges — `_format_chunk_range`
+/// e.g. [1,2,3,5,25,26,27] → "1-3,5,25-27"
+fn format_chunk_range(chunk_numbers: &[i32]) -> String {
+    if chunk_numbers.is_empty() {
+        return String::new();
+    }
+
+    let mut sorted = chunk_numbers.to_vec();
+    sorted.sort_unstable();
+
+    let mut ranges = Vec::new();
+    let mut start = sorted[0];
+    let mut end = sorted[0];
+
+    for &num in &sorted[1..] {
+        if num == end + 1 {
+            end = num;
+        } else {
+            if start == end {
+                ranges.push(format!("{start}"));
+            } else {
+                ranges.push(format!("{start}-{end}"));
+            }
+            start = num;
+            end = num;
+        }
+    }
+    if start == end {
+        ranges.push(format!("{start}"));
+    } else {
+        ranges.push(format!("{start}-{end}"));
+    }
+    ranges.join(",")
+}
+
+/// Analyze and report patterns in delay transitions — `_analyze_transition_patterns`
+fn analyze_transition_patterns(cluster_info: &[ClusterDiagnostic], log: &dyn Fn(&str)) {
+    if cluster_info.len() < 2 {
+        return;
+    }
+
+    // Calculate all jumps
+    let jumps: Vec<f64> = cluster_info
+        .windows(2)
+        .map(|w| w[1].mean_delay_ms - w[0].mean_delay_ms)
+        .collect();
+
+    let all_positive = jumps.iter().all(|&j| j > 0.0);
+    let all_negative = jumps.iter().all(|&j| j < 0.0);
+
+    // Check for consistent jump sizes (50ms tolerance)
+    let jump_sizes: Vec<f64> = jumps.iter().map(|j| j.abs()).collect();
+    let mean_jump = jump_sizes.iter().sum::<f64>() / jump_sizes.len() as f64;
+    let consistent_jumps = jump_sizes.iter().all(|&j| (j - mean_jump).abs() < 50.0);
+
+    log("[Transition Analysis]:");
+
+    if all_positive {
+        log("  → All delays INCREASE (accumulating lag = missing content)");
+    } else if all_negative {
+        log("  → All delays DECREASE (accumulating lead = extra content)");
+    } else {
+        log("  → Mixed pattern (some increases, some decreases)");
+    }
+
+    if consistent_jumps && jumps.len() > 1 {
+        log(&format!(
+            "  → Consistent jump size: ~{mean_jump:.0}ms per transition"
+        ));
+        log("  → Likely cause: Regular reel changes or commercial breaks");
+    } else {
+        let jump_strs: Vec<String> = jumps.iter().map(|j| format!("{j:+.0}ms")).collect();
+        log(&format!(
+            "  → Variable jump sizes: {}",
+            jump_strs.join(", ")
+        ));
+        log("  → Likely cause: Scene-specific edits or variable content changes");
+    }
+
+    // Low match score warnings (70% threshold)
+    let low_match_clusters: Vec<&ClusterDiagnostic> = cluster_info
+        .iter()
+        .filter(|c| c.min_match_pct < 70.0)
+        .collect();
+    if !low_match_clusters.is_empty() {
+        log(&format!(
+            "  ⚠ {} clusters have chunks with match < 70%",
+            low_match_clusters.len()
+        ));
+        log("  → Possible silence sections or content mismatches at transitions");
+    }
+}
+
+/// Build cluster diagnostics with verbose logging — `_build_cluster_diagnostics`
 fn build_cluster_diagnostics(
     accepted: &[&ChunkResult],
     cluster_members: &HashMap<i32, Vec<usize>>,
+    verbose: bool,
+    log: &dyn Fn(&str),
 ) -> Vec<ClusterDiagnostic> {
     let mut info: Vec<ClusterDiagnostic> = Vec::new();
 
@@ -410,6 +508,40 @@ fn build_cluster_diagnostics(
     }
 
     info.sort_by(|a, b| a.mean_delay_ms.partial_cmp(&b.mean_delay_ms).unwrap());
+
+    // Verbose logging — 1:1 with Python
+    if verbose && !info.is_empty() {
+        log("[Cluster Diagnostics] Detailed composition:");
+
+        for (i, cluster) in info.iter().enumerate() {
+            let chunk_range = format_chunk_range(&cluster.chunk_numbers);
+            let delay_jump = if i > 0 {
+                let prev_delay = info[i - 1].mean_delay_ms;
+                let jump = cluster.mean_delay_ms - prev_delay;
+                let direction = if jump > 0.0 { "↑" } else { "↓" };
+                format!(" [{direction}{:+.0}ms jump]", jump.abs())
+            } else {
+                String::new()
+            };
+
+            log(&format!(
+                "  Cluster {}: delay={:+.0}±{:.1}ms, chunks {} (@{:.1}s - @{:.1}s), \
+                 match={:.1}% (min={:.1}%){delay_jump}",
+                i + 1,
+                cluster.mean_delay_ms,
+                cluster.std_delay_ms,
+                chunk_range,
+                cluster.time_range.0,
+                cluster.time_range.1,
+                cluster.mean_match_pct,
+                cluster.min_match_pct,
+            ));
+        }
+
+        // Analyze transition patterns
+        analyze_transition_patterns(&info, log);
+    }
+
     info
 }
 

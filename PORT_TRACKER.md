@@ -40,15 +40,15 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 12 | `analysis/types.py` | `analysis/types.rs` | ❌ Not Audited | CorrelationResult, etc |
-| 13 | `analysis/track_selection.py` | `analysis/track_selection.rs` | ❌ Not Audited | Auto track selection |
-| 14 | `analysis/container_delays.py` | `analysis/container_delays.rs` | ❌ Not Audited | Container delay detection |
-| 15 | `analysis/delay_selection.py` | `analysis/delay_selection.rs` | ❌ Not Audited | Best delay picking |
-| 16 | `analysis/drift_detection.py` | `analysis/drift_detection.rs` | ❌ Not Audited | PAL drift detection |
-| 17 | `analysis/global_shift.py` | `analysis/global_shift.rs` | ❌ Not Audited | Global shift detection |
-| 18 | `analysis/source_separation.py` | `analysis/source_separation.rs` | ❌ Not Audited | Audio source separation |
-| 19 | `analysis/sync_stability.py` | `analysis/sync_stability.rs` | ❌ Not Audited | Variance detection |
-| 20 | `analysis/videodiff.py` | `analysis/videodiff.rs` | ❌ Not Audited | Video frame differencing |
+| 12 | `analysis/types.py` | `analysis/types.rs` | ✅ Verified | 9 structs + 1 enum (DiagnosisResult) replaces Python's 13 dataclasses. All fields match. Enum variants replace 3 separate diagnosis classes. |
+| 13 | `analysis/track_selection.py` | `analysis/track_selection.rs` | ✅ Verified | 2/2 functions match. Priority order: explicit → language → first. |
+| 14 | `analysis/container_delays.py` | `analysis/container_delays.rs` | ✅ Verified | 3/3 functions match. Container delay chain calculation, min_timestamp→ms rounding. |
+| 15 | `analysis/delay_selection.py` | `analysis/delay_selection.rs` | ✅ Verified | All 5 delay modes: Mode, Mode(Clustered), Mode(EarlyCluster), FirstStable, Average. |
+| 16 | `analysis/drift_detection.py` | `analysis/drift_detection.rs` | ✅ Verified | Custom dbscan_1d replaces sklearn. linear_fit+r_squared replace numpy. Added: format_chunk_range, analyze_transition_patterns, verbose cluster logging. |
+| 17 | `analysis/global_shift.py` | `analysis/global_shift.rs` | ✅ Verified | 2/2 functions match. Negative delay elimination and application. |
+| 18 | `analysis/source_separation.py` | `analysis/source_separation.rs` | ⚠️ Stub | 57 lines vs 1559. Known gap — Python uses python-audio-separator (ML). Needs ONNX Runtime or subprocess approach. Decided in previous chat to defer. |
+| 19 | `analysis/sync_stability.py` | `analysis/sync_stability.rs` | ✅ Verified | analyze_sync_stability with uniform + cluster modes. Outlier detection, std_dev calculations match. |
+| 20 | `analysis/videodiff.py` | `analysis/videodiff.rs` | ✅ Verified | Added: detect_speed_drift (Pearson correlation |r|>0.7), compute_confidence (3-tier with exact Python thresholds). RANSAC + match_frames inlined in main function. |
 
 ### 1.5 Analysis — Correlation
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 11 | 0 | 138 |
+| **Core** | 149 | 19 | 1 | 129 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **11** | **0** | **179** |
+| **TOTAL** | **190** | **19** | **1** | **170** |
 
 > Last updated: 2026-03-23
