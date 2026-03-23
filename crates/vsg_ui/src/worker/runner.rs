@@ -101,19 +101,46 @@ pub fn run_job_batch(config: JobRunnerConfig, signals: SignalCallbacks) {
         let attachment_sources = extract_string_array(job_data, "attachment_sources");
         let source_settings = extract_source_settings(job_data);
 
-        let pipeline_result = pipeline.run_job(
-            &sources,
-            config.and_merge,
-            &config.output_dir,
-            manual_layout,
-            attachment_sources,
-            source_settings,
-        );
+        // Wrap pipeline.run_job in catch_unwind for panic safety
+        // (1:1 with Python's try/except around pipeline.run_job)
+        let run_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            pipeline.run_job(
+                &sources,
+                config.and_merge,
+                &config.output_dir,
+                manual_layout,
+                attachment_sources,
+                source_settings,
+            )
+        }));
 
-        // Serialize result to JSON for signal emission
-        let result_json = pipeline_result_to_json(&pipeline_result, job_data);
+        let result_json = match run_result {
+            Ok(pipeline_result) => pipeline_result_to_json(&pipeline_result, job_data),
+            Err(panic_info) => {
+                let panic_msg = panic_info
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| panic_info.downcast_ref::<&str>().copied())
+                    .unwrap_or("Unknown panic");
+
+                (log_cb)(&format!(
+                    "[FATAL WORKER ERROR] Job {}/{} panicked: {}",
+                    i + 1,
+                    total_jobs,
+                    panic_msg
+                ));
+
+                // Build an error result matching Python's except block
+                serde_json::json!({
+                    "status": "Failed",
+                    "error": format!("Pipeline panic: {}", panic_msg),
+                    "name": source1_name,
+                    "job_data_for_batch_check": job_data,
+                })
+            }
+        };
+
         let result_str = serde_json::to_string(&result_json).unwrap_or_default();
-
         (signals.finished_job)(&result_str);
         all_results.push(result_json);
     }
