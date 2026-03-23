@@ -26,6 +26,18 @@ pub mod ffi {
         #[qinvokable]
         fn get_job_details(self: Pin<&mut ReportViewerLogic>, index: i32) -> QString;
 
+        /// Get status summary text for a job (calls ReportWriter.get_job_status_summary).
+        #[qinvokable]
+        fn get_job_status_summary(self: Pin<&mut ReportViewerLogic>, index: i32) -> QString;
+
+        /// Get delays summary text for a job (calls ReportWriter.get_delays_summary).
+        #[qinvokable]
+        fn get_job_delays_summary(self: Pin<&mut ReportViewerLogic>, index: i32) -> QString;
+
+        /// Get report summary as JSON {successful, warnings, failed, total}.
+        #[qinvokable]
+        fn get_summary(self: Pin<&mut ReportViewerLogic>) -> QString;
+
         /// Open the report file externally.
         #[qinvokable]
         fn open_externally(self: Pin<&mut ReportViewerLogic>);
@@ -128,6 +140,50 @@ impl ffi::ReportViewerLogic {
     fn get_job_details(self: Pin<&mut Self>, index: i32) -> QString {
         // Same data as get_job_data — QML formats the detail display
         self.get_job_data(index)
+    }
+
+    fn get_job_status_summary(self: Pin<&mut Self>, index: i32) -> QString {
+        let idx = index as usize;
+        let job = self
+            .rust()
+            .report_data
+            .as_ref()
+            .and_then(|d| d.get("jobs"))
+            .and_then(|j| j.as_array())
+            .and_then(|a| a.get(idx));
+
+        match job {
+            Some(j) => QString::from(ReportWriter::get_job_status_summary(j).as_str()),
+            None => QString::from("Unknown"),
+        }
+    }
+
+    fn get_job_delays_summary(self: Pin<&mut Self>, index: i32) -> QString {
+        let idx = index as usize;
+        let job = self
+            .rust()
+            .report_data
+            .as_ref()
+            .and_then(|d| d.get("jobs"))
+            .and_then(|j| j.as_array())
+            .and_then(|a| a.get(idx));
+
+        match job {
+            Some(j) => QString::from(ReportWriter::get_delays_summary(j).as_str()),
+            None => QString::from("—"),
+        }
+    }
+
+    fn get_summary(self: Pin<&mut Self>) -> QString {
+        let summary = self
+            .rust()
+            .report_data
+            .as_ref()
+            .and_then(|d| d.get("summary"))
+            .cloned()
+            .unwrap_or(serde_json::json!({}));
+        let json = serde_json::to_string(&summary).unwrap_or_else(|_| "{}".to_string());
+        QString::from(json.as_str())
     }
 
     /// Open the report file externally via xdg-open.
