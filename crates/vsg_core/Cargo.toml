@@ -26,6 +26,8 @@ quick-xml = { workspace = true }
 zip = { workspace = true }
 uuid = { workspace = true }
 webrtc-vad = { workspace = true }
+image = { workspace = true }
+opencv = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
