@@ -98,14 +98,14 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 45 | `subtitles/data.py` | `subtitles/data.rs` | ❌ Not Audited | SubtitleData, styles, events |
-| 46 | `subtitles/style_engine.py` | `subtitles/style_engine.rs` | ❌ Not Audited | Style application engine |
-| 47 | `subtitles/edit_plan.py` | `subtitles/edit_plan.rs` | ❌ Not Audited | Edit plan building |
-| 48 | `subtitles/track_processor.py` | `subtitles/track_processor.rs` | ❌ Not Audited | Per-track processing |
-| 49 | `subtitles/sync_dispatcher.py` | `subtitles/sync_dispatcher.rs` | ❌ Not Audited | Sync mode dispatch |
-| 50 | `subtitles/sync_modes.py` | `subtitles/sync_modes.rs` | ❌ Not Audited | Sync mode definitions |
-| 51 | `subtitles/sync_utils.py` | `subtitles/sync_utils.rs` | ❌ Not Audited | Timing utilities |
-| 52 | `subtitles/checkpoint_selection.py` | `subtitles/checkpoint_selection.rs` | ❌ Not Audited | Checkpoint selection |
+| 45 | `subtitles/data.py` | `subtitles/data.rs` | ✅ Verified | 11 structs match. Added: save_json, from_json (serde), remove_events, filter_by_styles wrapper. Added Serialize/Deserialize derives. apply_* operations in separate modules (valid pattern). |
+| 46 | `subtitles/style_engine.py` | `subtitles/style_engine.rs` | ✅ Verified | 22/22 methods. Color conversion, signatures, template merge, temp file mgmt. |
+| 47 | `subtitles/edit_plan.py` | `subtitles/edit_plan.rs` | ✅ Verified | 8/8 structs, 27 methods. Full non-destructive edit plan with JSON save/load. |
+| 48 | `subtitles/track_processor.py` | `subtitles/track_processor.rs` | ✅ Verified | 7-step pipeline. Calls style_ops, stepping, sync_dispatcher. Diagnostic logging. |
+| 49 | `subtitles/sync_dispatcher.py` | `subtitles/sync_dispatcher.rs` | ✅ Verified | Cached VV + Source1 ref + plugin dispatch all present. Missing: _run_frame_audit_if_enabled (diagnostic only, depends on frame_utils — section 1.12). |
+| 50 | `subtitles/sync_modes.py` | `subtitles/sync_modes.rs` | ✅ Verified | Plugin registry with SyncPlugin trait + lazy loading. |
+| 51 | `subtitles/sync_utils.py` | `subtitles/sync_utils.rs` | ✅ Verified | apply_delay_to_events with SyncEventData population. |
+| 52 | `subtitles/checkpoint_selection.py` | `subtitles/checkpoint_selection.rs` | ✅ Verified | Smart 3-checkpoint selection: filter OP/ED → longest duration → temporal spread. |
 
 ### 1.10 Subtitles — Parsers & Writers
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 43 | 1 | 105 |
+| **Core** | 149 | 51 | 1 | 97 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **43** | **1** | **146** |
+| **TOTAL** | **190** | **51** | **1** | **138** |
 
 > Last updated: 2026-03-23

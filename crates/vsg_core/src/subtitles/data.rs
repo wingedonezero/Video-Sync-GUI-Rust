@@ -588,7 +588,7 @@ impl OperationRecord {
 }
 
 /// Result of applying an operation — `OperationResult`
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationResult {
     pub success: bool,
     pub operation: String,
@@ -633,6 +633,7 @@ impl OperationResult {
 ///
 /// THE SINGLE source of truth for subtitle processing.
 /// All timing stored as FLOAT MILLISECONDS.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubtitleData {
     // Source information
     pub source_path: Option<PathBuf>,
@@ -885,6 +886,62 @@ impl SubtitleData {
         }
         self.events = unique;
         removed
+    }
+
+    /// Save complete JSON representation with all metadata — `save_json()`
+    ///
+    /// Contains ALL data including OCR metadata, sync adjustments, per-event
+    /// tracking, and operations history that would be lost in ASS/SRT output.
+    pub fn save_json(&self, path: &Path) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize SubtitleData to JSON: {e}"))?;
+        std::fs::write(path, json)
+            .map_err(|e| format!("Failed to write JSON file: {e}"))?;
+        Ok(())
+    }
+
+    /// Load SubtitleData from a JSON file produced by save_json() — `from_json()`
+    pub fn from_json(path: &Path) -> Result<Self, String> {
+        let contents = std::fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read JSON file: {e}"))?;
+        let data: SubtitleData = serde_json::from_str(&contents)
+            .map_err(|e| format!("Failed to parse SubtitleData JSON: {e}"))?;
+        Ok(data)
+    }
+
+    /// Remove events at specified indices — `remove_events()`
+    ///
+    /// Sorts indices in reverse to preserve positions during removal.
+    pub fn remove_events(&mut self, indices: &[usize]) -> usize {
+        let mut sorted_indices: Vec<usize> = indices.to_vec();
+        sorted_indices.sort_unstable();
+        sorted_indices.dedup();
+        sorted_indices.reverse();
+
+        let mut count = 0;
+        for idx in sorted_indices {
+            if idx < self.events.len() {
+                self.events.remove(idx);
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// Filter events by style name — convenience wrapper for `style_ops::apply_style_filter`.
+    ///
+    /// Delegates to `operations::style_ops::apply_style_filter()`.
+    pub fn filter_by_styles(
+        &mut self,
+        styles: &[String],
+        mode: &str,
+        forced_include: Option<&[usize]>,
+        forced_exclude: Option<&[usize]>,
+        log: Option<&dyn Fn(&str)>,
+    ) -> OperationResult {
+        crate::subtitles::operations::style_ops::apply_style_filter(
+            self, styles, mode, forced_include, forced_exclude, log,
+        )
     }
 }
 
