@@ -78,21 +78,21 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 35 | `correction/linear.py` | `correction/linear.rs` | ❌ Not Audited | Linear offset correction |
-| 36 | `correction/pal.py` | `correction/pal.rs` | ❌ Not Audited | PAL speed correction |
+| 35 | `correction/linear.py` | `correction/linear.rs` | ✅ Verified | get_sample_rate, all 3 resample engines (rubberband/atempo/aresample), ALL audio tracks per source, preserve+correct flow. Minor: Rust continues on error vs Python raises. |
+| 36 | `correction/pal.py` | `correction/pal.rs` | ✅ Verified | PAL tempo (24000/1001)/25, rubberband filter, preserve+correct flow, container_delay clear. All matching. |
 
 ### 1.8 Correction — Stepping
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 37 | `correction/stepping/types.py` | `correction/stepping/types.rs` | ❌ Not Audited | Stepping data types |
-| 38 | `correction/stepping/run.py` | `correction/stepping/run.rs` | ❌ Not Audited | Main stepping entry |
-| 39 | `correction/stepping/timeline.py` | `correction/stepping/timeline.rs` | ❌ Not Audited | Timeline building |
-| 40 | `correction/stepping/boundary_refiner.py` | `correction/stepping/boundary_refiner.rs` | ❌ Not Audited | Boundary refinement |
-| 41 | `correction/stepping/audio_assembly.py` | `correction/stepping/audio_assembly.rs` | ❌ Not Audited | Audio segment assembly |
-| 42 | `correction/stepping/edl_builder.py` | `correction/stepping/edl_builder.rs` | ❌ Not Audited | EDL file building |
-| 43 | `correction/stepping/data_io.py` | `correction/stepping/data_io.rs` | ❌ Not Audited | Data serialization |
-| 44 | `correction/stepping/qa_check.py` | `correction/stepping/qa_check.rs` | ❌ Not Audited | Quality assurance |
+| 37 | `correction/stepping/types.py` | `correction/stepping/types.rs` | ✅ Verified | 6/6 structs match. AudioSegment Hash/Eq custom impl. |
+| 38 | `correction/stepping/run.py` | `correction/stepping/run.rs` | ✅ Verified | 4/4 functions. Full orchestration: load→zones→refine→EDL→QA→apply. |
+| 39 | `correction/stepping/timeline.py` | `correction/stepping/timeline.rs` | ✅ Verified | 2/2 functions + unit tests. Time conversion helpers. |
+| 40 | `correction/stepping/boundary_refiner.py` | `correction/stepping/boundary_refiner.rs` | ✅ Verified | 11/11 functions. Silence/VAD/transient/zero-crossing/video-snap all ported. webrtc_vad crate. |
+| 41 | `correction/stepping/audio_assembly.py` | `correction/stepping/audio_assembly.rs` | ✅ Verified | 5/5 functions. Gap insert, overlap trim, drift correction, FLAC encode, concat. |
+| 42 | `correction/stepping/edl_builder.py` | `correction/stepping/edl_builder.rs` | ✅ Verified | 2/2 functions. Transition zones + splice→AudioSegment EDL. |
+| 43 | `correction/stepping/data_io.py` | `correction/stepping/data_io.rs` | ✅ Verified | 2/2 functions. JSON save/load with serde. |
+| 44 | `correction/stepping/qa_check.py` | `correction/stepping/qa_check.rs` | ✅ Verified | 1/1 function. Full QA pipeline: decode→filter→correlate→evaluate. |
 
 ### 1.9 Subtitles — Core
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 33 | 1 | 115 |
+| **Core** | 149 | 43 | 1 | 105 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **33** | **1** | **156** |
+| **TOTAL** | **190** | **43** | **1** | **146** |
 
 > Last updated: 2026-03-23
