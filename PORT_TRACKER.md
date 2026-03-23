@@ -46,7 +46,7 @@ Python: 149 files | Rust: 148 files
 | 15 | `analysis/delay_selection.py` | `analysis/delay_selection.rs` | ✅ Verified | All 5 delay modes: Mode, Mode(Clustered), Mode(EarlyCluster), FirstStable, Average. |
 | 16 | `analysis/drift_detection.py` | `analysis/drift_detection.rs` | ✅ Verified | Custom dbscan_1d replaces sklearn. linear_fit+r_squared replace numpy. Added: format_chunk_range, analyze_transition_patterns, verbose cluster logging. |
 | 17 | `analysis/global_shift.py` | `analysis/global_shift.rs` | ✅ Verified | 2/2 functions match. Negative delay elimination and application. |
-| 18 | `analysis/source_separation.py` | `analysis/source_separation.rs` | ⚠️ Stub | 57 lines vs 1559. Known gap — Python uses python-audio-separator (ML). Needs ONNX Runtime or subprocess approach. Decided in previous chat to defer. |
+| 18 | `analysis/source_separation.py` | `analysis/source_separation.rs` | 🔴 Deferred | 57 lines vs 1559. STUB — returns empty, app falls back to original audio. Models are PyTorch pickle format (.th/.ckpt), not loadable by tch or ONNX directly. Needs one-time Python export to ONNX, then `ort` crate for inference. Dedicated sprint later. UI model manager also depends on this. |
 | 19 | `analysis/sync_stability.py` | `analysis/sync_stability.rs` | ✅ Verified | analyze_sync_stability with uniform + cluster modes. Outlier detection, std_dev calculations match. |
 | 20 | `analysis/videodiff.py` | `analysis/videodiff.rs` | ✅ Verified | Added: detect_speed_drift (Pearson correlation |r|>0.7), compute_confidence (3-tier with exact Python thresholds). RANSAC + match_frames inlined in main function. |
 
