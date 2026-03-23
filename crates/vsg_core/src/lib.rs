@@ -1,3 +1,6 @@
+// Allow common patterns that match the 1:1 Python port API signatures
+#![allow(clippy::too_many_arguments)]
+
 pub mod analysis;
 pub mod audit;
 pub mod chapters;

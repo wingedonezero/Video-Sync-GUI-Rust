@@ -16,9 +16,14 @@ pub mod writers;
 pub mod checkpoint_selection;
 pub mod diagnostics;
 pub mod edit_plan;
+#[allow(unused_imports, unused_variables, dead_code, clippy::all)]
+pub mod frame_utils;
+#[allow(unused_imports, unused_variables, dead_code, clippy::all)]
+pub mod ocr;
 pub mod operations;
 pub mod style_engine;
 pub mod sync_dispatcher;
+#[allow(unused_imports, unused_variables, dead_code, clippy::all)]
 pub mod sync_mode_plugins;
 pub mod sync_modes;
 pub mod sync_utils;
