@@ -11,4 +11,5 @@ pub mod mux;
 pub mod orchestrator;
 pub mod pipeline;
 pub mod pipeline_components;
+pub mod postprocess;
 pub mod reporting;

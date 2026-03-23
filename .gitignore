@@ -30,3 +30,7 @@ Dependencies/
 venv/
 .python/
 .claude
+
+# Libtorch download
+libtorch-rocm.zip
+libtorch/
