@@ -26,15 +26,15 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 8 | `io/runner.py` | `io/runner.rs` | ❌ Not Audited | CommandRunner, run(), log |
-| 9 | `job_discovery.py` | `job_discovery.rs` | ❌ Not Audited | discover_jobs, file matching |
+| 8 | `io/runner.py` | `io/runner.rs` | ✅ Verified | run/run_binary/run_with_options match. Compact mode, progress filter, tail buffer, stdin, binary mode all ported. Note: GPU subprocess env (system/gpu_env.py) not set — tracked as file #149. |
+| 9 | `job_discovery.py` | `job_discovery.rs` | ✅ Verified | Single file + batch folder modes match. Extensions, sorting, matching all correct. Return format: Rust returns flat HashMap (UI wraps in {"sources":...}). |
 
 ### 1.3 Extraction
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 10 | `extraction/tracks.py` | `extraction/tracks.rs` | ❌ Not Audited | extract_tracks, get_track_info_for_dialog |
-| 11 | `extraction/attachments.py` | `extraction/attachments.rs` | ❌ Not Audited | extract_attachments |
+| 10 | `extraction/tracks.py` | `extraction/tracks.rs` | ✅ Verified | 11/11 functions, codec map 21/21, detailed error reports (3 types), video/audio detail builders with all special cases (DTS-HD MA, Atmos, HDR, HLG, DV). |
+| 11 | `extraction/attachments.py` | `extraction/attachments.rs` | ✅ Verified | Font detection: all MIME prefixes, 11 exact MIMEs, binary+ext, 3 keywords, 10 extensions. Extraction flow matches. 4 tests. |
 
 ### 1.4 Analysis
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 7 | 0 | 142 |
+| **Core** | 149 | 11 | 0 | 138 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **7** | **0** | **183** |
+| **TOTAL** | **190** | **11** | **0** | **179** |
 
 > Last updated: 2026-03-23
