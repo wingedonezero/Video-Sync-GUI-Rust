@@ -26,8 +26,8 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 8 | `io/runner.py` | `io/runner.rs` | ❌ Not Audited | CommandRunner, run(), log |
-| 9 | `job_discovery.py` | `job_discovery.rs` | ❌ Not Audited | discover_jobs, file matching |
+| 8 | `io/runner.py` | `io/runner.rs` | ✅ Verified | run/run_binary/run_with_options match. Compact mode, progress filter, tail buffer, stdin, binary mode all ported. Note: GPU subprocess env (system/gpu_env.py) not set — tracked as file #149. |
+| 9 | `job_discovery.py` | `job_discovery.rs` | ✅ Verified | Single file + batch folder modes match. Extensions, sorting, matching all correct. Return format: Rust returns flat HashMap (UI wraps in {"sources":...}). |
 
 ### 1.3 Extraction
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 7 | 0 | 142 |
+| **Core** | 149 | 9 | 0 | 140 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **7** | **0** | **183** |
+| **TOTAL** | **190** | **9** | **0** | **181** |
 
 > Last updated: 2026-03-23
