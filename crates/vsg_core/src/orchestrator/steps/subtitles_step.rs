@@ -32,7 +32,7 @@ impl SubtitlesStep {
         // Video-Verified Pre-Processing (once per source)
         let subtitle_sync_mode = ctx.settings.subtitle_sync_mode.to_string();
         if subtitle_sync_mode == "video-verified" {
-            if let Some(ref src1) = source1_file {
+            if let Some(ref _src1) = source1_file {
                 runner.log_message("[Subtitles] Running video-verified pre-processing...");
                 // Call preprocessing for each unique source that has subtitle tracks
                 let mut processed_sources = std::collections::HashSet::new();
