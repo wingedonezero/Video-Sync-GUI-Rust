@@ -7,6 +7,7 @@ use std::path::Path;
 
 use crate::io::runner::CommandRunner;
 use crate::models::settings::AppSettings;
+use crate::postprocess::finalizer::{check_if_rebasing_is_needed, finalize_merged_file};
 
 /// Executes sync merges and finalizes output — `SyncExecutor`
 pub struct SyncExecutor;
@@ -23,29 +24,27 @@ impl SyncExecutor {
     }
 
     /// Finalizes the merged output file — `finalize_output`
-    ///
-    /// Handles timestamp normalization if enabled and needed, otherwise
-    /// simply moves the file to its final location.
     pub fn finalize_output(
         temp_output_path: &Path,
         final_output_path: &Path,
-        _settings: &AppSettings,
-        _tool_paths: &HashMap<String, String>,
-        _runner: &CommandRunner,
+        settings: &AppSettings,
+        tool_paths: &HashMap<String, String>,
+        runner: &CommandRunner,
     ) -> Result<(), String> {
-        // TODO: When postprocess module is ported, add timestamp normalization check:
-        // if settings.post_mux_normalize_timestamps && check_if_rebasing_is_needed(...) {
-        //     finalize_merged_file(...)
-        // } else {
-        //     move file
-        // }
-        std::fs::rename(temp_output_path, final_output_path)
-            .or_else(|_| {
-                // rename fails across filesystems, fall back to copy+delete
-                std::fs::copy(temp_output_path, final_output_path)
-                    .map_err(|e| format!("Failed to copy output: {e}"))?;
-                let _ = std::fs::remove_file(temp_output_path);
-                Ok(())
-            })
+        let normalize_enabled = settings.post_mux_normalize_timestamps;
+
+        if normalize_enabled && check_if_rebasing_is_needed(temp_output_path, runner, tool_paths) {
+            finalize_merged_file(temp_output_path, final_output_path, runner, settings, tool_paths);
+            Ok(())
+        } else {
+            // Simple move
+            std::fs::rename(temp_output_path, final_output_path)
+                .or_else(|_| {
+                    std::fs::copy(temp_output_path, final_output_path)
+                        .map_err(|e| format!("Failed to copy output: {e}"))?;
+                    let _ = std::fs::remove_file(temp_output_path);
+                    Ok(())
+                })
+        }
     }
 }
