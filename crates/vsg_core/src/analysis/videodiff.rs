@@ -148,6 +148,90 @@ fn extract_frame_hashes(
 }
 
 /// Run native VideoDiff analysis — `run_native_videodiff`
+/// Detect speed/tempo drift by checking residual correlation with time.
+/// 1:1 port of `_detect_speed_drift()`.
+/// Strong correlation (|r| > 0.7) suggests systematic PAL speedup or similar.
+fn detect_speed_drift(
+    matches: &[(f64, f64)],
+    inlier_mask: &[bool],
+    offset_ms: f64,
+) -> bool {
+    let inlier_count = inlier_mask.iter().filter(|&&b| b).count();
+    if inlier_count < 20 {
+        return false;
+    }
+
+    let ref_times: Vec<f64> = matches
+        .iter()
+        .zip(inlier_mask)
+        .filter(|(_, &inl)| inl)
+        .map(|((r, _), _)| *r)
+        .collect();
+    let target_times: Vec<f64> = matches
+        .iter()
+        .zip(inlier_mask)
+        .filter(|(_, &inl)| inl)
+        .map(|((_, t), _)| *t)
+        .collect();
+
+    if ref_times.len() < 2 {
+        return false;
+    }
+
+    // Residuals after removing constant offset
+    let residuals: Vec<f64> = ref_times
+        .iter()
+        .zip(&target_times)
+        .map(|(r, t)| (t - r) - offset_ms)
+        .collect();
+
+    // Guard against zero stddev
+    let res_mean = residuals.iter().sum::<f64>() / residuals.len() as f64;
+    let res_var: f64 = residuals.iter().map(|&r| (r - res_mean).powi(2)).sum::<f64>()
+        / residuals.len() as f64;
+    if res_var.abs() < 1e-12 {
+        return false;
+    }
+
+    // Pearson correlation between ref_times and residuals
+    let n = ref_times.len() as f64;
+    let mean_x = ref_times.iter().sum::<f64>() / n;
+    let mean_y = res_mean;
+
+    let cov: f64 = ref_times
+        .iter()
+        .zip(&residuals)
+        .map(|(x, y)| (x - mean_x) * (y - mean_y))
+        .sum::<f64>()
+        / n;
+
+    let std_x = (ref_times.iter().map(|x| (x - mean_x).powi(2)).sum::<f64>() / n).sqrt();
+    let std_y = res_var.sqrt();
+
+    if std_x.abs() < 1e-12 || std_y.abs() < 1e-12 {
+        return false;
+    }
+
+    let corrcoef = cov / (std_x * std_y);
+    corrcoef.abs() > 0.7
+}
+
+/// Compute confidence level — 1:1 port of `_compute_confidence()`.
+fn compute_confidence(
+    _matched_frames: usize,
+    inlier_count: usize,
+    inlier_ratio: f64,
+    mean_residual_ms: f64,
+) -> &'static str {
+    if inlier_count >= 100 && inlier_ratio >= 0.85 && mean_residual_ms < 30.0 {
+        "HIGH"
+    } else if inlier_count >= 50 && inlier_ratio >= 0.70 && mean_residual_ms < 50.0 {
+        "MEDIUM"
+    } else {
+        "LOW"
+    }
+}
+
 pub fn run_native_videodiff(
     ref_path: &str,
     target_path: &str,
@@ -233,17 +317,16 @@ pub fn run_native_videodiff(
 
     let inlier_ratio = best_inlier_count as f64 / matches.len() as f64;
 
-    // Confidence
-    let confidence = if inlier_ratio > 0.8 && mean_residual < 50.0 {
-        "HIGH"
-    } else if inlier_ratio > 0.5 && mean_residual < 100.0 {
-        "MEDIUM"
-    } else {
-        "LOW"
-    };
+    // Confidence — 1:1 with Python _compute_confidence()
+    let confidence = compute_confidence(
+        matches.len(),
+        best_inlier_count,
+        inlier_ratio,
+        mean_residual,
+    );
 
-    // Speed drift detection (simple check)
-    let speed_drift = false; // TODO: implement residual correlation check
+    // Speed drift detection — 1:1 with Python _detect_speed_drift()
+    let speed_drift = detect_speed_drift(&matches, &best_inliers, raw_offset);
 
     let result = VideoDiffResult {
         offset_ms: rounded_offset,

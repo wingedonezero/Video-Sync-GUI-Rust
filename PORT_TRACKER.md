@@ -44,11 +44,11 @@ Python: 149 files | Rust: 148 files
 | 13 | `analysis/track_selection.py` | `analysis/track_selection.rs` | ✅ Verified | 2/2 functions match. Priority order: explicit → language → first. |
 | 14 | `analysis/container_delays.py` | `analysis/container_delays.rs` | ✅ Verified | 3/3 functions match. Container delay chain calculation, min_timestamp→ms rounding. |
 | 15 | `analysis/delay_selection.py` | `analysis/delay_selection.rs` | ✅ Verified | All 5 delay modes: Mode, Mode(Clustered), Mode(EarlyCluster), FirstStable, Average. |
-| 16 | `analysis/drift_detection.py` | `analysis/drift_detection.rs` | ✅ Verified | Custom dbscan_1d replaces sklearn. linear_fit+r_squared replace numpy. Missing: _format_chunk_range, _analyze_transition_patterns (logging only). |
+| 16 | `analysis/drift_detection.py` | `analysis/drift_detection.rs` | ✅ Verified | Custom dbscan_1d replaces sklearn. linear_fit+r_squared replace numpy. Added: format_chunk_range, analyze_transition_patterns, verbose cluster logging. |
 | 17 | `analysis/global_shift.py` | `analysis/global_shift.rs` | ✅ Verified | 2/2 functions match. Negative delay elimination and application. |
 | 18 | `analysis/source_separation.py` | `analysis/source_separation.rs` | ⚠️ Stub | 57 lines vs 1559. Known gap — Python uses python-audio-separator (ML). Needs ONNX Runtime or subprocess approach. Decided in previous chat to defer. |
 | 19 | `analysis/sync_stability.py` | `analysis/sync_stability.rs` | ✅ Verified | analyze_sync_stability with uniform + cluster modes. Outlier detection, std_dev calculations match. |
-| 20 | `analysis/videodiff.py` | `analysis/videodiff.rs` | ⚠️ Gaps Found | Core flow works: dhash, hamming, frame extraction, RANSAC inlined. Missing: speed_drift_detected always false (TODO), confidence calculation simplified, _match_frames inlined. |
+| 20 | `analysis/videodiff.py` | `analysis/videodiff.rs` | ✅ Verified | Added: detect_speed_drift (Pearson correlation |r|>0.7), compute_confidence (3-tier with exact Python thresholds). RANSAC + match_frames inlined in main function. |
 
 ### 1.5 Analysis — Correlation
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 18 | 2 | 129 |
+| **Core** | 149 | 19 | 1 | 129 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **18** | **2** | **170** |
+| **TOTAL** | **190** | **19** | **1** | **170** |
 
 > Last updated: 2026-03-23
