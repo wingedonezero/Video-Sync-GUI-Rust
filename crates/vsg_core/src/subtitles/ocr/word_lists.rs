@@ -283,13 +283,53 @@ impl ValidationStats {
     }
 }
 
-/// Trait for spell checking (stub - enchant not available in Rust).
+/// Trait for spell checking backends.
 ///
-/// In the Python version, this uses `enchant.Dict`. In Rust, we provide
-/// a trait that can be implemented by any spell checker backend.
+/// In the Python version, this uses `enchant.Dict`. In Rust, we use the
+/// `enchant` crate which wraps the same libenchant C library.
 pub trait SpellChecker: Send + Sync {
     /// Check if a word is correctly spelled.
     fn check(&self, word: &str) -> bool;
+}
+
+/// Enchant-based spell checker — wraps libenchant (same as Python's pyenchant).
+///
+/// Supports multiple backends (hunspell, aspell, etc.) via enchant's provider system.
+pub struct EnchantSpellChecker {
+    dict: enchant::Dict,
+}
+
+// SAFETY: enchant::Dict is not Send+Sync by default, but we only use it
+// from a single thread in practice (OCR processing is sequential per track).
+unsafe impl Send for EnchantSpellChecker {}
+unsafe impl Sync for EnchantSpellChecker {}
+
+impl EnchantSpellChecker {
+    /// Create a new enchant spell checker for the given language.
+    ///
+    /// Returns None if the language dictionary is not available.
+    pub fn new(lang: &str) -> Option<Self> {
+        let mut broker = enchant::Broker::new();
+        if !broker.dict_exists(lang) {
+            return None;
+        }
+        match broker.request_dict(lang) {
+            Ok(dict) => Some(Self { dict }),
+            Err(_) => None,
+        }
+    }
+
+    /// Check if a dictionary exists for the given language code.
+    pub fn dict_exists(lang: &str) -> bool {
+        let mut broker = enchant::Broker::new();
+        broker.dict_exists(lang)
+    }
+}
+
+impl SpellChecker for EnchantSpellChecker {
+    fn check(&self, word: &str) -> bool {
+        self.dict.check(word).unwrap_or(false)
+    }
 }
 
 /// Central manager for word validation across all OCR components.
@@ -302,10 +342,9 @@ pub struct ValidationManager {
     pub config_dir: PathBuf,
     config_path: PathBuf,
     pub word_lists: Vec<WordList>,
-    /// System spell checker (stubbed - enchant not available).
+    /// System spell checker (enchant-based, same as Python's pyenchant).
     pub spell_checker: Option<Box<dyn SpellChecker>>,
     /// Additional language dictionaries for protection only (not fix validation).
-    /// Stubbed - enchant not available in Rust.
     pub protection_checkers: HashMap<String, Box<dyn SpellChecker>>,
     stats: ValidationStats,
 }
@@ -333,12 +372,42 @@ impl ValidationManager {
 
     /// Load additional language dictionaries for word protection.
     ///
-    /// STUB: Enchant/Hunspell not available in the Rust port.
     /// Words found in any of these languages are considered "known" and
     /// protected from auto-fixing, but are NOT valid fix targets.
+    /// Uses enchant (libenchant) for dictionary access — same as Python's pyenchant.
     pub fn init_protection_languages(&mut self) {
-        // Stub: enchant not available in Rust port
-        debug!("[WordLists] Enchant not available in Rust port, skipping extra languages");
+        // Languages commonly found in anime subtitles
+        let languages = [
+            ("en_US", "English (US)"),
+            ("en_GB", "English (UK)"),
+            ("ja", "Japanese"),
+            ("fr_FR", "French"),
+            ("de_DE", "German"),
+            ("es_ES", "Spanish"),
+            ("pt_BR", "Portuguese"),
+            ("it_IT", "Italian"),
+            ("ko_KR", "Korean"),
+            ("zh_CN", "Chinese"),
+        ];
+
+        let mut loaded = Vec::new();
+        for (lang_code, lang_name) in &languages {
+            if EnchantSpellChecker::dict_exists(lang_code) {
+                if let Some(checker) = EnchantSpellChecker::new(lang_code) {
+                    self.protection_checkers.insert(
+                        lang_code.to_string(),
+                        Box::new(checker),
+                    );
+                    loaded.push(format!("{lang_name} ({lang_code})"));
+                }
+            }
+        }
+
+        if !loaded.is_empty() {
+            info!("[WordLists] Loaded {} protection languages: {}", loaded.len(), loaded.join(", "));
+        } else {
+            debug!("[WordLists] No enchant dictionaries found for protection languages");
+        }
     }
 
     /// Check if a word exists in any protection language dictionary.
