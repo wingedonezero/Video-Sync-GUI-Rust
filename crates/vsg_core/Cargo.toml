@@ -25,6 +25,7 @@ rustfft = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }
 uuid = { workspace = true }
+webrtc-vad = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
