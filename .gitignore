@@ -31,6 +31,12 @@ venv/
 .python/
 .claude
 
+# Machine-specific cargo config
+.cargo/config.toml
+
+# Libclang symlink
+libclang.so
+
 # Libtorch download
 libtorch-rocm.zip
 libtorch/

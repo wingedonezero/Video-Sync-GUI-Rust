@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::subtitles::data::*;
 
 /// Encodings to try when auto-detecting.
+#[allow(dead_code)]
 const ENCODINGS_TO_TRY: &[&str] = &[
     "utf-8-sig", "utf-8", "utf-16", "utf-16-le", "utf-16-be",
     "shift_jis", "gbk", "gb2312", "big5", "cp1252", "latin1",
@@ -53,12 +54,21 @@ fn read_file_content(path: &Path) -> Result<(String, String, bool), String> {
         let bytes = if raw.starts_with(&[0xEF, 0xBB, 0xBF]) { &raw[3..] } else { &raw };
         String::from_utf8_lossy(bytes).to_string()
     } else if encoding.starts_with("utf-16") {
-        // Handle UTF-16
-        let (cow, _encoding_used, had_errors) = encoding_rs::UTF_8.decode(&raw);
-        if had_errors {
-            String::from_utf8_lossy(&raw).to_string()
+        // Handle UTF-16 (LE/BE)
+        if raw.starts_with(&[0xFF, 0xFE]) {
+            // UTF-16 LE with BOM
+            let u16_data: Vec<u16> = raw[2..].chunks_exact(2)
+                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .collect();
+            String::from_utf16_lossy(&u16_data)
+        } else if raw.starts_with(&[0xFE, 0xFF]) {
+            // UTF-16 BE with BOM
+            let u16_data: Vec<u16> = raw[2..].chunks_exact(2)
+                .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                .collect();
+            String::from_utf16_lossy(&u16_data)
         } else {
-            cow.to_string()
+            String::from_utf8_lossy(&raw).to_string()
         }
     } else {
         String::from_utf8_lossy(&raw).to_string()
@@ -86,7 +96,7 @@ pub fn parse_ass_file(path: &Path) -> Result<SubtitleData, String> {
     let mut current_lines: Vec<String> = Vec::new();
     let mut event_index: i32 = 0;
 
-    let mut flush_section = |data: &mut SubtitleData,
+    let flush_section = |data: &mut SubtitleData,
                               section: &Option<String>,
                               lines: &[String],
                               event_idx: &mut i32| {
