@@ -67,61 +67,61 @@ Python: 149 files | Rust: 148 files
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 29 | `analysis/correlation/methods/scc.py` | `analysis/correlation/methods/scc.rs` | ❌ Not Audited | Standard cross-correlation |
-| 30 | `analysis/correlation/methods/gcc_phat.py` | `analysis/correlation/methods/gcc_phat.rs` | ❌ Not Audited | GCC-PHAT |
-| 31 | `analysis/correlation/methods/gcc_scot.py` | `analysis/correlation/methods/gcc_scot.rs` | ❌ Not Audited | GCC-SCOT |
-| 32 | `analysis/correlation/methods/gcc_whiten.py` | `analysis/correlation/methods/gcc_whiten.rs` | ❌ Not Audited | Whitened GCC |
-| 33 | `analysis/correlation/methods/onset.py` | `analysis/correlation/methods/onset.rs` | ❌ Not Audited | Onset detection |
-| 34 | `analysis/correlation/methods/spectrogram.py` | `analysis/correlation/methods/spectrogram.rs` | ❌ Not Audited | Spectrogram method |
+| 29 | `analysis/correlation/methods/scc.py` | `analysis/correlation/methods/scc.rs` | ✅ Verified | FFT→cross-multiply→IFFT→peak. Normalize, parabolic fit, confidence. Algorithm identical. |
+| 30 | `analysis/correlation/methods/gcc_phat.py` | `analysis/correlation/methods/gcc_phat.rs` | ✅ Verified | FFT→PHAT weighting (÷|G|)→bandpass→IFFT→PSR confidence. Algorithm identical. |
+| 31 | `analysis/correlation/methods/gcc_scot.py` | `analysis/correlation/methods/gcc_scot.rs` | ✅ Verified | FFT→SCOT weighting (÷sqrt(Rp*Tp))→bandpass→IFFT→PSR. Algorithm identical. |
+| 32 | `analysis/correlation/methods/gcc_whiten.py` | `analysis/correlation/methods/gcc_whiten.rs` | ✅ Verified | FFT→per-spectrum whitening→bandpass→cross-multiply→IFFT→PSR. Algorithm identical. |
+| 33 | `analysis/correlation/methods/onset.py` | `analysis/correlation/methods/onset.rs` | ✅ Verified | Spectrogram→spectral flux→ReLU→normalize→GCC-PHAT on envelopes. Uses gpu_backend::spectrogram(). |
+| 34 | `analysis/correlation/methods/spectrogram.py` | `analysis/correlation/methods/spectrogram.rs` | ✅ Verified | Mel spectrogram→dB→normalize→collapse→GCC-PHAT. Rust implements mel filterbank from scratch (correct). |
 
 ### 1.7 Correction
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 35 | `correction/linear.py` | `correction/linear.rs` | ❌ Not Audited | Linear offset correction |
-| 36 | `correction/pal.py` | `correction/pal.rs` | ❌ Not Audited | PAL speed correction |
+| 35 | `correction/linear.py` | `correction/linear.rs` | ✅ Verified | get_sample_rate, all 3 resample engines (rubberband/atempo/aresample), ALL audio tracks per source, preserve+correct flow. Minor: Rust continues on error vs Python raises. |
+| 36 | `correction/pal.py` | `correction/pal.rs` | ✅ Verified | PAL tempo (24000/1001)/25, rubberband filter, preserve+correct flow, container_delay clear. All matching. |
 
 ### 1.8 Correction — Stepping
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 37 | `correction/stepping/types.py` | `correction/stepping/types.rs` | ❌ Not Audited | Stepping data types |
-| 38 | `correction/stepping/run.py` | `correction/stepping/run.rs` | ❌ Not Audited | Main stepping entry |
-| 39 | `correction/stepping/timeline.py` | `correction/stepping/timeline.rs` | ❌ Not Audited | Timeline building |
-| 40 | `correction/stepping/boundary_refiner.py` | `correction/stepping/boundary_refiner.rs` | ❌ Not Audited | Boundary refinement |
-| 41 | `correction/stepping/audio_assembly.py` | `correction/stepping/audio_assembly.rs` | ❌ Not Audited | Audio segment assembly |
-| 42 | `correction/stepping/edl_builder.py` | `correction/stepping/edl_builder.rs` | ❌ Not Audited | EDL file building |
-| 43 | `correction/stepping/data_io.py` | `correction/stepping/data_io.rs` | ❌ Not Audited | Data serialization |
-| 44 | `correction/stepping/qa_check.py` | `correction/stepping/qa_check.rs` | ❌ Not Audited | Quality assurance |
+| 37 | `correction/stepping/types.py` | `correction/stepping/types.rs` | ✅ Verified | 6/6 structs match. AudioSegment Hash/Eq custom impl. |
+| 38 | `correction/stepping/run.py` | `correction/stepping/run.rs` | ✅ Verified | 4/4 functions. Full orchestration: load→zones→refine→EDL→QA→apply. |
+| 39 | `correction/stepping/timeline.py` | `correction/stepping/timeline.rs` | ✅ Verified | 2/2 functions + unit tests. Time conversion helpers. |
+| 40 | `correction/stepping/boundary_refiner.py` | `correction/stepping/boundary_refiner.rs` | ✅ Verified | 11/11 functions. Silence/VAD/transient/zero-crossing/video-snap all ported. webrtc_vad crate. |
+| 41 | `correction/stepping/audio_assembly.py` | `correction/stepping/audio_assembly.rs` | ✅ Verified | 5/5 functions. Gap insert, overlap trim, drift correction, FLAC encode, concat. |
+| 42 | `correction/stepping/edl_builder.py` | `correction/stepping/edl_builder.rs` | ✅ Verified | 2/2 functions. Transition zones + splice→AudioSegment EDL. |
+| 43 | `correction/stepping/data_io.py` | `correction/stepping/data_io.rs` | ✅ Verified | 2/2 functions. JSON save/load with serde. |
+| 44 | `correction/stepping/qa_check.py` | `correction/stepping/qa_check.rs` | ✅ Verified | 1/1 function. Full QA pipeline: decode→filter→correlate→evaluate. |
 
 ### 1.9 Subtitles — Core
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 45 | `subtitles/data.py` | `subtitles/data.rs` | ❌ Not Audited | SubtitleData, styles, events |
-| 46 | `subtitles/style_engine.py` | `subtitles/style_engine.rs` | ❌ Not Audited | Style application engine |
-| 47 | `subtitles/edit_plan.py` | `subtitles/edit_plan.rs` | ❌ Not Audited | Edit plan building |
-| 48 | `subtitles/track_processor.py` | `subtitles/track_processor.rs` | ❌ Not Audited | Per-track processing |
-| 49 | `subtitles/sync_dispatcher.py` | `subtitles/sync_dispatcher.rs` | ❌ Not Audited | Sync mode dispatch |
-| 50 | `subtitles/sync_modes.py` | `subtitles/sync_modes.rs` | ❌ Not Audited | Sync mode definitions |
-| 51 | `subtitles/sync_utils.py` | `subtitles/sync_utils.rs` | ❌ Not Audited | Timing utilities |
-| 52 | `subtitles/checkpoint_selection.py` | `subtitles/checkpoint_selection.rs` | ❌ Not Audited | Checkpoint selection |
+| 45 | `subtitles/data.py` | `subtitles/data.rs` | ✅ Verified | 11 structs match. Added: save_json, from_json (serde), remove_events, filter_by_styles wrapper. Added Serialize/Deserialize derives. apply_* operations in separate modules (valid pattern). |
+| 46 | `subtitles/style_engine.py` | `subtitles/style_engine.rs` | ✅ Verified | 22/22 methods. Color conversion, signatures, template merge, temp file mgmt. |
+| 47 | `subtitles/edit_plan.py` | `subtitles/edit_plan.rs` | ✅ Verified | 8/8 structs, 27 methods. Full non-destructive edit plan with JSON save/load. |
+| 48 | `subtitles/track_processor.py` | `subtitles/track_processor.rs` | ✅ Verified | 7-step pipeline. Calls style_ops, stepping, sync_dispatcher. Diagnostic logging. |
+| 49 | `subtitles/sync_dispatcher.py` | `subtitles/sync_dispatcher.rs` | ✅ Verified | Cached VV + Source1 ref + plugin dispatch all present. Missing: _run_frame_audit_if_enabled (diagnostic only, depends on frame_utils — section 1.12). |
+| 50 | `subtitles/sync_modes.py` | `subtitles/sync_modes.rs` | ✅ Verified | Plugin registry with SyncPlugin trait + lazy loading. |
+| 51 | `subtitles/sync_utils.py` | `subtitles/sync_utils.rs` | ✅ Verified | apply_delay_to_events with SyncEventData population. |
+| 52 | `subtitles/checkpoint_selection.py` | `subtitles/checkpoint_selection.rs` | ✅ Verified | Smart 3-checkpoint selection: filter OP/ED → longest duration → temporal spread. |
 
 ### 1.10 Subtitles — Parsers & Writers
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 53 | `subtitles/parsers/ass_parser.py` | `subtitles/parsers/ass_parser.rs` | ❌ Not Audited | ASS/SSA parser |
-| 54 | `subtitles/parsers/srt_parser.py` | `subtitles/parsers/srt_parser.rs` | ❌ Not Audited | SRT parser |
-| 55 | `subtitles/writers/ass_writer.py` | `subtitles/writers/ass_writer.rs` | ❌ Not Audited | ASS output writer |
-| 56 | `subtitles/writers/srt_writer.py` | `subtitles/writers/srt_writer.rs` | ❌ Not Audited | SRT output writer |
+| 53 | `subtitles/parsers/ass_parser.py` | `subtitles/parsers/ass_parser.rs` | ✅ Verified | Added encoding fallback: shift_jis, gbk, gb2312, big5, cp1252, latin1 via encoding_rs. BOM detection, section ordering, format preservation all match. |
+| 54 | `subtitles/parsers/srt_parser.py` | `subtitles/parsers/srt_parser.rs` | ✅ Verified | Added: parse_vtt_file (WebVTT with optional hours), color tag conversion (#RRGGBB→&HBBGGRR&), VTT class/voice tag stripping, encoding detection with encoding_rs fallback. 7 tests. |
+| 55 | `subtitles/writers/ass_writer.py` | `subtitles/writers/ass_writer.rs` | ✅ Verified | Added fps parameter (Option<f64>) for surgical rounding. Surgical round_batch call marked TODO for section 1.12 wiring. Section ordering, BOM, line endings all match. |
+| 56 | `subtitles/writers/srt_writer.py` | `subtitles/writers/srt_writer.rs` | ✅ Verified | Timing format, comment filtering, index preservation, ASS tag stripping, BOM handling all match. |
 
 ### 1.11 Subtitles — Operations
 
 | # | Python File | Rust File | Status | Notes |
 |---|---|---|---|---|
-| 57 | `subtitles/operations/style_ops.py` | `subtitles/operations/style_ops.rs` | ❌ Not Audited | Style manipulation |
-| 58 | `subtitles/operations/stepping.py` | `subtitles/operations/stepping.rs` | ❌ Not Audited | Stepping on subtitles |
+| 57 | `subtitles/operations/style_ops.py` | `subtitles/operations/style_ops.rs` | ✅ Verified | 5/5 functions: style_patch, font_replacement, size_multiplier, rescale, style_filter. Full override tag scaling with transform blocks. |
+| 58 | `subtitles/operations/stepping.py` | `subtitles/operations/stepping.rs` | ✅ Verified | apply_stepping with start/midpoint/majority boundary modes. Region tracking improved (i64 keys vs float). |
 
 ### 1.12 Subtitles — Frame Utils
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 27 | 1 | 121 |
+| **Core** | 149 | 57 | 1 | 91 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **27** | **1** | **162** |
+| **TOTAL** | **190** | **57** | **1** | **132** |
 
 > Last updated: 2026-03-23

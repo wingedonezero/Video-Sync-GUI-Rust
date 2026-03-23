@@ -8,14 +8,22 @@ use std::path::Path;
 
 use crate::subtitles::data::*;
 
-/// Encodings to try when auto-detecting.
-#[allow(dead_code)]
+/// Encodings to try in order — matches Python's ENCODINGS_TO_TRY.
+/// BOM-based encodings are checked first via raw bytes, then we try each
+/// encoding via encoding_rs to find one that decodes without errors.
 const ENCODINGS_TO_TRY: &[&str] = &[
-    "utf-8-sig", "utf-8", "utf-16", "utf-16-le", "utf-16-be",
-    "shift_jis", "gbk", "gb2312", "big5", "cp1252", "latin1",
+    "shift_jis",
+    "gbk",
+    "gb2312",
+    "big5",
+    "windows-1252",
+    "iso-8859-1",
 ];
 
 /// Detect file encoding — `detect_encoding`
+///
+/// 1:1 port of Python's detect_encoding() with full fallback chain:
+/// BOM check → UTF-8 → shift_jis → gbk → gb2312 → big5 → cp1252 → latin1
 fn detect_encoding(path: &Path) -> (String, bool) {
     let raw = match std::fs::read(path) {
         Ok(data) => data,
@@ -33,12 +41,22 @@ fn detect_encoding(path: &Path) -> (String, bool) {
         return ("utf-16-be".to_string(), true);
     }
 
-    // Try UTF-8 (most common)
+    // Try UTF-8 first (most common for modern subtitle files)
     if std::str::from_utf8(&raw).is_ok() {
         return ("utf-8".to_string(), false);
     }
 
-    // Default fallback
+    // Try each encoding via encoding_rs — matches Python's for loop
+    for &enc_name in ENCODINGS_TO_TRY {
+        if let Some(encoding) = encoding_rs::Encoding::for_label(enc_name.as_bytes()) {
+            let (_, _, had_errors) = encoding.decode(&raw);
+            if !had_errors {
+                return (enc_name.to_string(), false);
+            }
+        }
+    }
+
+    // Final fallback
     ("utf-8".to_string(), false)
 }
 
@@ -71,7 +89,13 @@ fn read_file_content(path: &Path) -> Result<(String, String, bool), String> {
             String::from_utf8_lossy(&raw).to_string()
         }
     } else {
-        String::from_utf8_lossy(&raw).to_string()
+        // Use encoding_rs for non-UTF8 encodings (shift_jis, gbk, cp1252, etc.)
+        if let Some(enc) = encoding_rs::Encoding::for_label(encoding.as_bytes()) {
+            let (result, _, _) = enc.decode(&raw);
+            result.to_string()
+        } else {
+            String::from_utf8_lossy(&raw).to_string()
+        }
     };
 
     Ok((content, encoding, has_bom))
