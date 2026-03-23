@@ -271,7 +271,7 @@ impl ffi::MainController {
 
     /// Browse for a path — 1:1 port of `controller.py::browse_for_path`.
     /// In QML, the FileDialog is handled by QML itself; this is called with the result.
-    fn browse_for_path(mut self: Pin<&mut Self>, source_index: i32) {
+    fn browse_for_path(self: Pin<&mut Self>, source_index: i32) {
         // QML will handle the actual FileDialog; this just signals which source.
         // The QML side sets the property directly from the FileDialog result.
         let _ = source_index;

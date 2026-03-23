@@ -41,7 +41,7 @@ impl EnhancedSignatureGenerator {
         } else {
             // Strict: includes codec, language, and position
             let mut type_counters: HashMap<String, i64> = HashMap::new();
-            for (_source_key, tracks) in track_info {
+            for tracks in track_info.values() {
                 for track in tracks {
                     let track_type = track
                         .get("type")

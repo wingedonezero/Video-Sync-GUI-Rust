@@ -3,6 +3,12 @@
 //! 1:1 port of the Python entry in `main.py`.
 //! Initializes Qt, loads the QML engine, and shows the main window.
 
+// Allow dead code for:
+// - QObject signals (called from QML, not Rust)
+// - Utility functions/structs not yet wired to QML
+// - Worker runner (will be called from QML thread management)
+#![allow(dead_code)]
+
 // ── CXX-Qt bridges — all QObject definitions (required to be in one directory) ──
 mod bridges;
 

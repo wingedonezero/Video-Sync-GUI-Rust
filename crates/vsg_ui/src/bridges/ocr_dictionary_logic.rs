@@ -71,6 +71,7 @@ use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use vsg_core::subtitles::ocr::dictionaries::OCRDictionaries;
 
+#[derive(Default)]
 pub struct OCRDictionaryLogicRust {
     replacement_count: i32,
     word_count: i32,
@@ -78,16 +79,6 @@ pub struct OCRDictionaryLogicRust {
     dicts: Option<OCRDictionaries>,
 }
 
-impl Default for OCRDictionaryLogicRust {
-    fn default() -> Self {
-        Self {
-            replacement_count: 0,
-            word_count: 0,
-            config_dir_path: None,
-            dicts: None,
-        }
-    }
-}
 
 impl ffi::OCRDictionaryLogic {
     fn initialize(mut self: Pin<&mut Self>, config_dir: QString) {
@@ -100,10 +91,7 @@ impl ffi::OCRDictionaryLogic {
     fn get_replacements(mut self: Pin<&mut Self>) -> QString {
         if let Some(dicts) = self.as_mut().rust_mut().dicts.as_mut() {
             let rules = dicts.load_replacements();
-            let count = rules.len() as i32;
-            // Have to drop the borrow before calling set_replacement_count
             let json = serde_json::to_string(&rules).unwrap_or_else(|_| "[]".to_string());
-            // Can't call set_replacement_count here due to borrow, will be set by QML
             return QString::from(json.as_str());
         }
         QString::from("[]")

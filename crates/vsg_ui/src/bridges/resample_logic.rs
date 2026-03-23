@@ -37,9 +37,9 @@ pub mod ffi {
 use core::pin::Pin;
 use std::process::Command;
 
-use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 
+#[derive(Default)]
 pub struct ResampleLogicRust {
     source_x: i32,
     source_y: i32,
@@ -47,16 +47,6 @@ pub struct ResampleLogicRust {
     dest_y: i32,
 }
 
-impl Default for ResampleLogicRust {
-    fn default() -> Self {
-        Self {
-            source_x: 0,
-            source_y: 0,
-            dest_x: 0,
-            dest_y: 0,
-        }
-    }
-}
 
 impl ffi::ResampleLogic {
     fn initialize(mut self: Pin<&mut Self>, data_json: QString) {

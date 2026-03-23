@@ -49,19 +49,12 @@ use cxx_qt::CxxQtType;
 use cxx_qt_lib::QString;
 use vsg_core::favorite_colors::FavoriteColorsManager;
 
+#[derive(Default)]
 pub struct FavoritesLogicRust {
     favorite_count: i32,
     manager: Option<FavoriteColorsManager>,
 }
 
-impl Default for FavoritesLogicRust {
-    fn default() -> Self {
-        Self {
-            favorite_count: 0,
-            manager: None,
-        }
-    }
-}
 
 impl ffi::FavoritesLogic {
     fn initialize(mut self: Pin<&mut Self>, config_dir: QString) {

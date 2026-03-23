@@ -277,7 +277,7 @@ impl ffi::TrackWidgetLogic {
                 .rust()
                 .track_data
                 .get("style_patch")
-                .map_or(false, |v| !v.is_null())
+                .is_some_and(|v| !v.is_null())
             {
                 badges.push("STYLED");
             }
@@ -286,7 +286,7 @@ impl ffi::TrackWidgetLogic {
                 .track_data
                 .get("sync_exclusion_styles")
                 .and_then(|v| v.as_array())
-                .map_or(false, |a| !a.is_empty())
+                .is_some_and(|a| !a.is_empty())
             {
                 badges.push("SYNC-EX");
             }

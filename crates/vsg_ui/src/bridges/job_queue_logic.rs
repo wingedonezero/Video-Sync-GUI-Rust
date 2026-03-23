@@ -93,6 +93,7 @@ use cxx_qt_lib::QString;
 use vsg_core::job_layouts::JobLayoutManager;
 
 /// Backing Rust struct for JobQueueLogic.
+#[derive(Default)]
 pub struct JobQueueLogicRust {
     job_count: i32,
     has_clipboard: bool,
@@ -101,17 +102,6 @@ pub struct JobQueueLogicRust {
     layout_clipboard: Option<serde_json::Value>,
 }
 
-impl Default for JobQueueLogicRust {
-    fn default() -> Self {
-        Self {
-            job_count: 0,
-            has_clipboard: false,
-            jobs: Vec::new(),
-            layout_manager: None,
-            layout_clipboard: None,
-        }
-    }
-}
 
 /// Natural sort key for filenames — 1:1 port of `natural_sort_key()`.
 fn natural_sort_key(s: &str) -> Vec<String> {
@@ -242,7 +232,7 @@ impl ffi::JobQueueLogic {
             })
             .unwrap_or_default();
 
-        let is_configured = self.rust().layout_manager.as_ref().map_or(false, |lm| {
+        let is_configured = self.rust().layout_manager.as_ref().is_some_and(|lm| {
             let src_map = get_sources(job);
             lm.layout_exists(&lm.generate_job_id(&src_map))
         });
