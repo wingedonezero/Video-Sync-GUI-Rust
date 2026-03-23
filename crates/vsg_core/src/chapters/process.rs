@@ -1,11 +1,16 @@
 //! Chapter processing — 1:1 port of `vsg_core/chapters/process.py`.
 //!
 //! Handles chapter extraction, shifting, snapping, normalization,
-//! deduplication, and renaming. Uses roxmltree for parsing and
-//! manual XML output (Matroska chapter XML is a simple format).
+//! deduplication, and renaming. Uses quick-xml for both parsing and writing.
 
 use std::collections::HashMap;
+use std::io::Cursor;
 use std::path::Path;
+
+use quick_xml::escape::unescape;
+use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
+use quick_xml::reader::Reader;
+use quick_xml::writer::Writer;
 
 use crate::io::runner::CommandRunner;
 use crate::models::settings::AppSettings;
@@ -124,147 +129,264 @@ struct ChapterAtom {
     displays: Vec<ChapterDisplay>,
 }
 
-// ─── XML parsing ─────────────────────────────────────────────────────────────
+// ─── XML parsing with quick-xml ──────────────────────────────────────────────
 
 /// Parse chapter XML into a list of ChapterAtom structs.
 fn parse_chapter_xml(xml_content: &str) -> Result<Vec<ChapterAtom>, String> {
-    let doc = roxmltree::Document::parse(xml_content)
-        .map_err(|e| format!("XML parse error: {e}"))?;
+    let mut reader = Reader::from_str(xml_content);
+    reader.config_mut().trim_text(false);
 
-    let mut chapters = Vec::new();
+    let mut chapters: Vec<ChapterAtom> = Vec::new();
+    let mut buf = Vec::new();
 
-    for atom_node in doc.descendants().filter(|n| n.has_tag_name("ChapterAtom")) {
-        let start_ns = atom_node
-            .descendants()
-            .find(|n| n.has_tag_name("ChapterTimeStart"))
-            .and_then(|n| n.text())
-            .map(parse_ns);
+    // State tracking for nested elements
+    let mut in_chapter_atom = false;
+    let mut in_chapter_display = false;
+    let mut current_element = String::new();
 
-        let start_ns = match start_ns {
-            Some(ns) => ns,
-            None => continue,
-        };
+    // Current chapter being built
+    let mut current_start_ns: Option<i64> = None;
+    let mut current_end_ns: Option<i64> = None;
+    let mut current_displays: Vec<ChapterDisplay> = Vec::new();
 
-        let end_ns = atom_node
-            .descendants()
-            .find(|n| n.has_tag_name("ChapterTimeEnd"))
-            .and_then(|n| n.text())
-            .map(parse_ns);
+    // Current display being built
+    let mut current_string = String::new();
+    let mut current_language = String::new();
+    let mut current_ietf = String::new();
 
-        let mut displays = Vec::new();
-        for display_node in atom_node
-            .children()
-            .filter(|n| n.has_tag_name("ChapterDisplay"))
-        {
-            let chapter_string = display_node
-                .descendants()
-                .find(|n| n.has_tag_name("ChapterString"))
-                .and_then(|n| n.text())
-                .unwrap_or("")
-                .to_string();
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(Event::Start(ref e)) => {
+                let name = String::from_utf8_lossy(e.local_name().as_ref()).to_string();
+                match name.as_str() {
+                    "ChapterAtom" => {
+                        in_chapter_atom = true;
+                        current_start_ns = None;
+                        current_end_ns = None;
+                        current_displays.clear();
+                    }
+                    "ChapterDisplay" if in_chapter_atom => {
+                        in_chapter_display = true;
+                        current_string.clear();
+                        current_language.clear();
+                        current_ietf.clear();
+                    }
+                    _ if in_chapter_atom => {
+                        current_element = name;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let name = String::from_utf8_lossy(e.local_name().as_ref()).to_string();
+                match name.as_str() {
+                    "ChapterAtom" => {
+                        if let Some(start_ns) = current_start_ns {
+                            let mut displays = current_displays.clone();
+                            if displays.is_empty() {
+                                displays.push(ChapterDisplay {
+                                    chapter_string: format!(
+                                        "Chapter {}",
+                                        chapters.len() + 1
+                                    ),
+                                    chapter_language: "und".to_string(),
+                                    chapter_language_ietf: "und".to_string(),
+                                });
+                            }
+                            chapters.push(ChapterAtom {
+                                start_ns,
+                                end_ns: current_end_ns,
+                                displays,
+                            });
+                        }
+                        in_chapter_atom = false;
+                    }
+                    "ChapterDisplay" => {
+                        if in_chapter_display {
+                            let lang = if current_language.is_empty() {
+                                "und".to_string()
+                            } else {
+                                current_language.clone()
+                            };
+                            let ietf = if current_ietf.is_empty() {
+                                lang_639_to_ietf(&lang).to_string()
+                            } else {
+                                current_ietf.clone()
+                            };
+                            current_displays.push(ChapterDisplay {
+                                chapter_string: current_string.clone(),
+                                chapter_language: lang,
+                                chapter_language_ietf: ietf,
+                            });
+                            in_chapter_display = false;
+                        }
+                    }
+                    _ => {
+                        current_element.clear();
+                    }
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                let decoded = e
+                    .decode()
+                    .map_err(|err| format!("XML text decode error: {err}"))?;
+                let text = unescape(&decoded)
+                    .map_err(|err| format!("XML unescape error: {err}"))?
+                    .to_string();
 
-            let chapter_language = display_node
-                .descendants()
-                .find(|n| n.has_tag_name("ChapterLanguage"))
-                .and_then(|n| n.text())
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|| "und".to_string());
-
-            let chapter_language_ietf = display_node
-                .descendants()
-                .find(|n| n.has_tag_name("ChapLanguageIETF"))
-                .and_then(|n| n.text())
-                .map(|s| s.trim().to_string())
-                .unwrap_or_else(|| lang_639_to_ietf(&chapter_language).to_string());
-
-            displays.push(ChapterDisplay {
-                chapter_string,
-                chapter_language,
-                chapter_language_ietf,
-            });
+                if in_chapter_display {
+                    match current_element.as_str() {
+                        "ChapterString" => current_string.push_str(&text),
+                        "ChapterLanguage" => current_language.push_str(text.trim()),
+                        "ChapLanguageIETF" => current_ietf.push_str(text.trim()),
+                        _ => {}
+                    }
+                } else if in_chapter_atom {
+                    match current_element.as_str() {
+                        "ChapterTimeStart" => {
+                            current_start_ns = Some(parse_ns(&text));
+                        }
+                        "ChapterTimeEnd" => {
+                            current_end_ns = Some(parse_ns(&text));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            // Handle XML entity references like &lt; &gt; &amp; &quot;
+            Ok(Event::GeneralRef(ref e)) => {
+                let entity = e.decode()
+                    .map_err(|err| format!("XML entity decode error: {err}"))?;
+                let resolved = match entity.as_ref() {
+                    "lt" => "<",
+                    "gt" => ">",
+                    "amp" => "&",
+                    "quot" => "\"",
+                    "apos" => "'",
+                    _ => "",
+                };
+                if !resolved.is_empty() && in_chapter_display {
+                    match current_element.as_str() {
+                        "ChapterString" => current_string.push_str(resolved),
+                        "ChapterLanguage" => current_language.push_str(resolved),
+                        "ChapLanguageIETF" => current_ietf.push_str(resolved),
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(format!("XML parse error at position {}: {e}", reader.error_position())),
+            _ => {}
         }
-
-        // If no displays, create a default one
-        if displays.is_empty() {
-            displays.push(ChapterDisplay {
-                chapter_string: format!("Chapter {}", chapters.len() + 1),
-                chapter_language: "und".to_string(),
-                chapter_language_ietf: "und".to_string(),
-            });
-        }
-
-        chapters.push(ChapterAtom {
-            start_ns,
-            end_ns,
-            displays,
-        });
+        buf.clear();
     }
 
     chapters.sort_by_key(|c| c.start_ns);
     Ok(chapters)
 }
 
-// ─── XML writing ─────────────────────────────────────────────────────────────
+// ─── XML writing with quick-xml ──────────────────────────────────────────────
 
-/// Write chapters back to Matroska chapter XML format.
-fn write_chapter_xml(chapters: &[ChapterAtom]) -> String {
-    let mut xml = String::new();
-    xml.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    xml.push_str("<Chapters>\n");
-    xml.push_str("  <EditionEntry>\n");
+/// Write chapters to Matroska chapter XML format using quick-xml writer.
+fn write_chapter_xml(chapters: &[ChapterAtom]) -> Result<String, String> {
+    let mut writer = Writer::new_with_indent(Cursor::new(Vec::new()), b' ', 2);
+
+    // XML declaration
+    writer
+        .write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))
+        .map_err(|e| format!("XML write error: {e}"))?;
+
+    // Newline after declaration
+    writer
+        .write_event(Event::Text(BytesText::new("\n")))
+        .map_err(|e| format!("XML write error: {e}"))?;
+
+    // <Chapters>
+    writer
+        .write_event(Event::Start(BytesStart::new("Chapters")))
+        .map_err(|e| format!("XML write error: {e}"))?;
+
+    // <EditionEntry>
+    writer
+        .write_event(Event::Start(BytesStart::new("EditionEntry")))
+        .map_err(|e| format!("XML write error: {e}"))?;
 
     for chapter in chapters {
-        xml.push_str("    <ChapterAtom>\n");
-        xml.push_str(&format!(
-            "      <ChapterTimeStart>{}</ChapterTimeStart>\n",
-            fmt_ns(chapter.start_ns)
-        ));
+        // <ChapterAtom>
+        writer
+            .write_event(Event::Start(BytesStart::new("ChapterAtom")))
+            .map_err(|e| format!("XML write error: {e}"))?;
+
+        // <ChapterTimeStart>
+        write_text_element(&mut writer, "ChapterTimeStart", &fmt_ns(chapter.start_ns))?;
+
+        // <ChapterTimeEnd>
         if let Some(end_ns) = chapter.end_ns {
-            xml.push_str(&format!(
-                "      <ChapterTimeEnd>{}</ChapterTimeEnd>\n",
-                fmt_ns(end_ns)
-            ));
+            write_text_element(&mut writer, "ChapterTimeEnd", &fmt_ns(end_ns))?;
         }
+
         for display in &chapter.displays {
-            xml.push_str("      <ChapterDisplay>\n");
-            xml.push_str(&format!(
-                "        <ChapterString>{}</ChapterString>\n",
-                xml_escape(&display.chapter_string)
-            ));
-            xml.push_str(&format!(
-                "        <ChapterLanguage>{}</ChapterLanguage>\n",
-                xml_escape(&display.chapter_language)
-            ));
-            xml.push_str(&format!(
-                "        <ChapLanguageIETF>{}</ChapLanguageIETF>\n",
-                xml_escape(&display.chapter_language_ietf)
-            ));
-            xml.push_str("      </ChapterDisplay>\n");
+            // <ChapterDisplay>
+            writer
+                .write_event(Event::Start(BytesStart::new("ChapterDisplay")))
+                .map_err(|e| format!("XML write error: {e}"))?;
+
+            write_text_element(&mut writer, "ChapterString", &display.chapter_string)?;
+            write_text_element(&mut writer, "ChapterLanguage", &display.chapter_language)?;
+            write_text_element(
+                &mut writer,
+                "ChapLanguageIETF",
+                &display.chapter_language_ietf,
+            )?;
+
+            // </ChapterDisplay>
+            writer
+                .write_event(Event::End(BytesEnd::new("ChapterDisplay")))
+                .map_err(|e| format!("XML write error: {e}"))?;
         }
-        xml.push_str("    </ChapterAtom>\n");
+
+        // </ChapterAtom>
+        writer
+            .write_event(Event::End(BytesEnd::new("ChapterAtom")))
+            .map_err(|e| format!("XML write error: {e}"))?;
     }
 
-    xml.push_str("  </EditionEntry>\n");
-    xml.push_str("</Chapters>\n");
-    xml
+    // </EditionEntry>
+    writer
+        .write_event(Event::End(BytesEnd::new("EditionEntry")))
+        .map_err(|e| format!("XML write error: {e}"))?;
+
+    // </Chapters>
+    writer
+        .write_event(Event::End(BytesEnd::new("Chapters")))
+        .map_err(|e| format!("XML write error: {e}"))?;
+
+    let result = writer.into_inner().into_inner();
+    String::from_utf8(result).map_err(|e| format!("UTF-8 error: {e}"))
 }
 
-/// Basic XML escaping for text content.
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&apos;")
+/// Helper to write a simple text element like `<Tag>text</Tag>`.
+fn write_text_element(
+    writer: &mut Writer<Cursor<Vec<u8>>>,
+    tag: &str,
+    text: &str,
+) -> Result<(), String> {
+    writer
+        .write_event(Event::Start(BytesStart::new(tag)))
+        .map_err(|e| format!("XML write error: {e}"))?;
+    writer
+        .write_event(Event::Text(BytesText::new(text)))
+        .map_err(|e| format!("XML write error: {e}"))?;
+    writer
+        .write_event(Event::End(BytesEnd::new(tag)))
+        .map_err(|e| format!("XML write error: {e}"))?;
+    Ok(())
 }
 
 // ─── Processing functions ────────────────────────────────────────────────────
 
 /// Normalize chapter end times and remove duplicates — `_normalize_and_dedupe_chapters`
-fn normalize_and_dedupe_chapters(
-    chapters: &mut Vec<ChapterAtom>,
-    runner: &CommandRunner,
-) {
+fn normalize_and_dedupe_chapters(chapters: &mut Vec<ChapterAtom>, runner: &CommandRunner) {
     // Remove duplicates (same start time)
     let mut seen_start_times = std::collections::HashSet::new();
     chapters.retain(|chap| {
@@ -558,7 +680,14 @@ pub fn process_chapters(
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
     let out_path = temp_dir.join(format!("{mkv_stem}_chapters_modified.xml"));
-    let xml_output = write_chapter_xml(&chapters);
+
+    let xml_output = match write_chapter_xml(&chapters) {
+        Ok(xml) => xml,
+        Err(e) => {
+            runner.log_message(&format!("[ERROR] Chapter XML writing failed: {e}"));
+            return None;
+        }
+    };
 
     match std::fs::write(&out_path, &xml_output) {
         Ok(()) => {
@@ -614,10 +743,7 @@ mod tests {
 
     #[test]
     fn fmt_ns_for_log_works() {
-        assert_eq!(
-            fmt_ns_for_log(91_074_316_666),
-            "00:01:31.074.316.666"
-        );
+        assert_eq!(fmt_ns_for_log(91_074_316_666), "00:01:31.074.316.666");
         assert_eq!(fmt_ns_for_log(0), "00:00:00.000.000.000");
     }
 
@@ -666,7 +792,30 @@ mod tests {
     }
 
     #[test]
-    fn write_chapter_xml_round_trip() {
+    fn parse_chapter_xml_with_namespace() {
+        // Some MKVs use namespace in chapter XML
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<Chapters xmlns="urn:ebml:matroska">
+  <EditionEntry>
+    <ChapterAtom>
+      <ChapterTimeStart>00:00:00.000000000</ChapterTimeStart>
+      <ChapterDisplay>
+        <ChapterString>Test</ChapterString>
+        <ChapterLanguage>jpn</ChapterLanguage>
+      </ChapterDisplay>
+    </ChapterAtom>
+  </EditionEntry>
+</Chapters>"#;
+
+        let chapters = parse_chapter_xml(xml).unwrap();
+        assert_eq!(chapters.len(), 1);
+        assert_eq!(chapters[0].displays[0].chapter_string, "Test");
+        assert_eq!(chapters[0].displays[0].chapter_language, "jpn");
+        assert_eq!(chapters[0].displays[0].chapter_language_ietf, "ja");
+    }
+
+    #[test]
+    fn write_chapter_xml_produces_valid_xml() {
         let chapters = vec![
             ChapterAtom {
                 start_ns: 0,
@@ -688,17 +837,44 @@ mod tests {
             },
         ];
 
-        let xml = write_chapter_xml(&chapters);
+        let xml = write_chapter_xml(&chapters).unwrap();
+
+        // Verify it's parseable
         let parsed = parse_chapter_xml(&xml).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0].start_ns, 0);
         assert_eq!(parsed[1].start_ns, 300_000_000_000);
         assert_eq!(parsed[0].displays[0].chapter_string, "Chapter 01");
+
+        // Verify structure
+        assert!(xml.contains("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
+        assert!(xml.contains("<Chapters>"));
+        assert!(xml.contains("<ChapterTimeStart>00:00:00.000000000</ChapterTimeStart>"));
+        assert!(xml.contains("<ChapLanguageIETF>en</ChapLanguageIETF>"));
     }
 
     #[test]
-    fn xml_escape_works() {
-        assert_eq!(xml_escape("a<b>c&d"), "a&lt;b&gt;c&amp;d");
-        assert_eq!(xml_escape("normal text"), "normal text");
+    fn write_chapter_xml_escapes_special_chars() {
+        let chapters = vec![ChapterAtom {
+            start_ns: 0,
+            end_ns: None,
+            displays: vec![ChapterDisplay {
+                chapter_string: "Part <1> & \"intro\"".to_string(),
+                chapter_language: "eng".to_string(),
+                chapter_language_ietf: "en".to_string(),
+            }],
+        }];
+
+        let xml = write_chapter_xml(&chapters).unwrap();
+        // quick-xml handles escaping automatically
+        assert!(xml.contains("&lt;1&gt;"));
+        assert!(xml.contains("&amp;"));
+
+        // Verify round-trip preserves the text
+        let parsed = parse_chapter_xml(&xml).unwrap();
+        assert_eq!(
+            parsed[0].displays[0].chapter_string,
+            "Part <1> & \"intro\""
+        );
     }
 }
