@@ -1,6 +1,6 @@
 [package]
 name = "vsg_ui"
-description = "Video Sync GUI - GTK4/Relm4 user interface"
+description = "Video Sync GUI - CXX-Qt user interface"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,13 +11,6 @@ name = "video-sync-gui"
 path = "src/main.rs"
 
 [dependencies]
-# Core library
 vsg_core = { path = "../vsg_core" }
-
-# GTK4 / Relm4
-gtk = { package = "gtk4", version = "0.10.3", features = ["v4_16"] }
-relm4 = "0.10.1"
-
-# Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
