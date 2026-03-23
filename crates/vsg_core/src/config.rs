@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub settings_path: PathBuf,
     /// Current settings
     pub settings: AppSettings,
+    /// Track accessed keys for typo detection — 1:1 with Python `_accessed_keys`
+    accessed_keys: std::collections::HashSet<String>,
 }
 
 impl AppConfig {
@@ -40,6 +42,7 @@ impl AppConfig {
             script_dir,
             settings_path,
             settings: AppSettings::default(),
+            accessed_keys: std::collections::HashSet::new(),
         };
 
         config.load()?;
@@ -61,7 +64,7 @@ impl AppConfig {
         let contents = fs::read_to_string(&self.settings_path)
             .map_err(|e| ConfigError::Io(e.to_string()))?;
 
-        // Try parsing as TOML first
+        // Try parsing as TOML first (fast path for valid files)
         match toml::from_str::<AppSettings>(&contents) {
             Ok(settings) => {
                 self.settings = settings;
@@ -74,13 +77,61 @@ impl AppConfig {
                         // Re-save as TOML
                         self.save()?;
                     }
-                    Err(_) => {
-                        // Both failed — use defaults
+                    Err(_json_err) => {
+                        // Both direct parsing failed — try field-by-field recovery.
+                        // 1:1 port of Python's field-by-field recovery path.
                         tracing::warn!(
-                            "Failed to parse settings file, using defaults: {}",
+                            "Direct parse failed for {}, attempting field-by-field recovery",
                             self.settings_path.display()
                         );
-                        self.settings = AppSettings::default();
+
+                        // Parse as raw key-value map
+                        let raw_map: Option<HashMap<String, serde_json::Value>> =
+                            toml::from_str::<HashMap<String, serde_json::Value>>(&contents)
+                                .ok()
+                                .or_else(|| serde_json::from_str(&contents).ok());
+
+                        if let Some(raw) = raw_map {
+                            // Start from defaults, then try each field individually
+                            self.settings = AppSettings::default();
+                            let mut rejected = Vec::new();
+
+                            for (key, value) in &raw {
+                                // Try setting this single field via JSON round-trip
+                                let mut test_json = match serde_json::to_value(&self.settings) {
+                                    Ok(serde_json::Value::Object(map)) => map,
+                                    _ => continue,
+                                };
+                                test_json.insert(key.clone(), value.clone());
+
+                                match serde_json::from_value::<AppSettings>(
+                                    serde_json::Value::Object(test_json),
+                                ) {
+                                    Ok(new_settings) => {
+                                        self.settings = new_settings;
+                                    }
+                                    Err(_) => {
+                                        rejected.push(key.clone());
+                                    }
+                                }
+                            }
+
+                            if !rejected.is_empty() {
+                                tracing::warn!(
+                                    "Settings recovery: {} field(s) reset to defaults: {}",
+                                    rejected.len(),
+                                    rejected.join(", ")
+                                );
+                            }
+                        } else {
+                            // Even raw parsing failed — use full defaults
+                            tracing::warn!(
+                                "Failed to parse settings file at all, using defaults: {}",
+                                self.settings_path.display()
+                            );
+                            self.settings = AppSettings::default();
+                        }
+
                         self.save()?;
                     }
                 }
@@ -132,7 +183,10 @@ impl AppConfig {
     }
 
     /// Get a setting value by field name — `get()`
-    pub fn get_str(&self, key: &str) -> Option<String> {
+    ///
+    /// Tracks accessed keys for typo detection.
+    pub fn get_str(&mut self, key: &str) -> Option<String> {
+        self.accessed_keys.insert(key.to_string());
         let json = serde_json::to_value(&self.settings).ok()?;
         json.get(key).map(|v| match v {
             serde_json::Value::String(s) => s.clone(),
@@ -141,21 +195,36 @@ impl AppConfig {
     }
 
     /// Get a setting as f64.
-    pub fn get_f64(&self, key: &str) -> Option<f64> {
+    pub fn get_f64(&mut self, key: &str) -> Option<f64> {
+        self.accessed_keys.insert(key.to_string());
         let json = serde_json::to_value(&self.settings).ok()?;
         json.get(key).and_then(|v| v.as_f64())
     }
 
     /// Get a setting as i64.
-    pub fn get_i64(&self, key: &str) -> Option<i64> {
+    pub fn get_i64(&mut self, key: &str) -> Option<i64> {
+        self.accessed_keys.insert(key.to_string());
         let json = serde_json::to_value(&self.settings).ok()?;
         json.get(key).and_then(|v| v.as_i64())
     }
 
     /// Get a setting as bool.
-    pub fn get_bool(&self, key: &str) -> Option<bool> {
+    pub fn get_bool(&mut self, key: &str) -> Option<bool> {
+        self.accessed_keys.insert(key.to_string());
         let json = serde_json::to_value(&self.settings).ok()?;
         json.get(key).and_then(|v| v.as_bool())
+    }
+
+    /// Returns set of accessed keys that are not in field_names.
+    /// 1:1 port of `get_unrecognized_keys()`.
+    pub fn get_unrecognized_keys(&self) -> Vec<String> {
+        let known_fields: std::collections::HashSet<&str> =
+            AppSettings::field_names().iter().copied().collect();
+        self.accessed_keys
+            .iter()
+            .filter(|k| !known_fields.contains(k.as_str()))
+            .cloned()
+            .collect()
     }
 
     /// Set a setting value by field name — `set()`
@@ -250,6 +319,97 @@ impl AppConfig {
         cleanup_dir_contents(&self.get_vs_index_dir())
     }
 
+    /// Clean up old files (> max_age_hours) in the style editor temp dir.
+    /// 1:1 port of `cleanup_old_style_editor_temp()`.
+    pub fn cleanup_old_style_editor_temp(&self, max_age_hours: f64) -> u32 {
+        cleanup_old_dir_contents(&self.get_style_editor_temp_dir(), max_age_hours)
+    }
+
+    /// Get a unique index directory for a specific video file.
+    /// Uses MD5 hash of the video path (matches Python's hashlib.md5).
+    /// 1:1 port of `get_vs_index_for_video()`.
+    pub fn get_vs_index_for_video(&self, video_path: &str) -> PathBuf {
+        use md5::{Digest, Md5};
+
+        let mut hasher = Md5::new();
+        hasher.update(video_path.as_bytes());
+        let hash = hasher.finalize();
+        let hash_hex = format!("{:x}", hash);
+        let short_hash = &hash_hex[..16]; // First 16 chars, same as Python [:16]
+
+        let index_dir = self.get_vs_index_dir().join(short_hash);
+        let _ = fs::create_dir_all(&index_dir);
+        index_dir
+    }
+
+    /// Get orphaned keys from the current settings file on disk.
+    /// 1:1 port of `get_orphaned_keys()`.
+    pub fn get_orphaned_keys(&self) -> Vec<String> {
+        if !self.settings_path.exists() {
+            return Vec::new();
+        }
+
+        let contents = match fs::read_to_string(&self.settings_path) {
+            Ok(c) => c,
+            Err(_) => return Vec::new(),
+        };
+
+        // Try TOML first, then JSON
+        let on_disk_keys: Vec<String> =
+            if let Ok(table) = contents.parse::<toml::Table>() {
+                table.keys().cloned().collect()
+            } else if let Ok(map) =
+                serde_json::from_str::<HashMap<String, serde_json::Value>>(&contents)
+            {
+                map.keys().cloned().collect()
+            } else {
+                return Vec::new();
+            };
+
+        let known_fields: std::collections::HashSet<&str> =
+            AppSettings::field_names().iter().copied().collect();
+
+        on_disk_keys
+            .into_iter()
+            .filter(|k| !known_fields.contains(k.as_str()))
+            .collect()
+    }
+
+    /// Remove orphaned keys from the settings file and re-save.
+    /// 1:1 port of `remove_orphaned_keys()`.
+    pub fn remove_orphaned_keys(&self) -> Vec<String> {
+        let orphaned = self.get_orphaned_keys();
+        if !orphaned.is_empty() {
+            // Re-save from model (excludes unknown keys automatically)
+            let _ = self.save();
+        }
+        orphaned
+    }
+
+    /// Validate that AppSettings fields match what we expect.
+    /// 1:1 port of `validate_schema()`.
+    pub fn validate_schema(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        let settings_fields: std::collections::HashSet<&str> =
+            AppSettings::field_names().iter().copied().collect();
+
+        // Check if serialized settings have unexpected keys
+        if let Ok(json) = serde_json::to_value(&self.settings) {
+            if let Some(obj) = json.as_object() {
+                for key in obj.keys() {
+                    if !settings_fields.contains(key.as_str()) {
+                        warnings.push(format!(
+                            "Serialized settings has key not in field_names: {key}"
+                        ));
+                    }
+                }
+            }
+        }
+
+        warnings
+    }
+
     /// Get orphaned keys from a JSON settings file (for migration detection).
     pub fn get_orphaned_keys_from_json(&self, json_path: &Path) -> Vec<String> {
         let contents = match fs::read_to_string(json_path) {
@@ -289,6 +449,42 @@ fn cleanup_dir_contents(dir: &Path) -> u32 {
             };
             if result.is_ok() {
                 count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Remove items older than `max_age_hours` from a directory.
+/// 1:1 port of `cleanup_old_style_editor_temp_files()`.
+fn cleanup_old_dir_contents(dir: &Path, max_age_hours: f64) -> u32 {
+    if !dir.exists() {
+        return 0;
+    }
+
+    let max_age_secs = max_age_hours * 3600.0;
+    let now = std::time::SystemTime::now();
+    let mut count = 0u32;
+
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let is_old = path
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|mtime| now.duration_since(mtime).ok())
+                .is_some_and(|age| age.as_secs_f64() > max_age_secs);
+
+            if is_old {
+                let result = if path.is_dir() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    fs::remove_file(&path)
+                };
+                if result.is_ok() {
+                    count += 1;
+                }
             }
         }
     }

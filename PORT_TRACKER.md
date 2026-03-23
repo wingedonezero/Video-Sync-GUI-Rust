@@ -16,11 +16,11 @@ Python: 149 files | Rust: 148 files
 |---|---|---|---|---|
 | 1 | `models/settings.py` | `models/settings.rs` | ✅ Verified | 172/172 fields match, all defaults match, 6 tests pass. Pydantic→serde. |
 | 2 | `models/jobs.py` | `models/jobs.rs` | ✅ Verified | Delays 4/4, PlanItem 33/33, MergePlan 5/5, PipelineResult 11/11. All fields match. status uses String not enum (worker compat). |
-| 3 | `models/context_types.py` | `models/context_types.rs` | ❌ Not Audited | ManualLayoutItem, type aliases |
-| 4 | `models/converters.py` | `models/converters.rs` | ❌ Not Audited | Setting type conversions |
-| 5 | `models/media.py` | `models/media.rs` | ❌ Not Audited | MediaInfo types |
+| 3 | `models/context_types.py` | `models/context_types.rs` | ✅ Verified | 14 TypedDicts + 2 type aliases all match. SegmentFlagsEntry uses Value for ClusterDiagnostic/Validation (avoids circular deps). |
+| 4 | `models/converters.py` | `models/converters.rs` | ✅ Verified | 3/3 functions match: tracks_from_dialog_info, realize_plan_from_manual_layout, signature_for_auto_apply. Counter→HashMap. |
+| 5 | `models/media.py` | `models/media.rs` | ✅ Verified | StreamProps 3/3, Track 4/4, Attachment 3/3. All fields match. |
 | 6 | `models/types.py` | `models/enums.rs` | ✅ Verified | 25/25 Literal types match as Rust enums. All serde renames match Python strings. +1 extra JobStatus enum (from jobs.py). |
-| 7 | `config.py` | `config.rs` | ❌ Not Audited | AppConfig, paths, JSON→TOML migration |
+| 7 | `config.py` | `config.rs` | ✅ Verified | All methods ported. Added: `cleanup_old_style_editor_temp()`, `get_vs_index_for_video()` (md5), `remove_orphaned_keys()`, `get_orphaned_keys()`, `get_unrecognized_keys()`, `validate_schema()`, field-by-field recovery. Skipped: `_migrate_legacy_keys()` (not needed for Rust). Added md-5 crate. |
 
 ### 1.2 IO & Discovery
 
@@ -407,8 +407,8 @@ Python: 41 files | Rust: 34 files (bridges) + 17 QML
 
 | Section | Total Files | Done | In Progress | Not Audited |
 |---|---|---|---|---|
-| **Core** | 149 | 3 | 0 | 146 |
+| **Core** | 149 | 7 | 0 | 142 |
 | **UI** | 41 | 0 | 0 | 41 |
-| **TOTAL** | **190** | **3** | **0** | **187** |
+| **TOTAL** | **190** | **7** | **0** | **183** |
 
 > Last updated: 2026-03-23
