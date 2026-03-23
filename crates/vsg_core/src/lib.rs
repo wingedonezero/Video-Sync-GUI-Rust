@@ -1,10 +1,14 @@
 pub mod analysis;
+pub mod audit;
 pub mod chapters;
 pub mod config;
 pub mod extraction;
+pub mod favorite_colors;
 pub mod io;
+pub mod job_discovery;
 pub mod models;
 pub mod mux;
 pub mod orchestrator;
 pub mod pipeline;
 pub mod pipeline_components;
+pub mod reporting;

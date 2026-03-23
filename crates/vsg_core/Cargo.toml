@@ -23,6 +23,8 @@ tch = { workspace = true }
 ndarray = { workspace = true }
 rustfft = { workspace = true }
 quick-xml = { workspace = true }
+zip = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
