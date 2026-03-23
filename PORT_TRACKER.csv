@@ -1,0 +1,290 @@
+Module,Python File,Python Lines,Rust File,Rust Lines,Status,Notes
+# ═══════════════════════════════════════════════════════════════
+# ENTRY POINT
+# ═══════════════════════════════════════════════════════════════
+entry,main.py,62,crates/vsg_ui/src/main.rs,16,needs_update,Needs CXX-Qt rewrite (currently GTK4)
+
+# ═══════════════════════════════════════════════════════════════
+# MODELS — Foundation types everything depends on
+# ═══════════════════════════════════════════════════════════════
+models,vsg_core/models/settings.py,414,crates/vsg_core/src/config/settings.rs,463,partial,Missing ~50+ fields (OCR/stepping/neural/multi-corr/source-sep)
+models,vsg_core/models/enums.py,—,crates/vsg_core/src/models/enums.rs,277,partial,Python uses Literal types in types.py instead; Rust has enums but missing some variants
+models,vsg_core/models/types.py,141,crates/vsg_core/src/models/enums.rs,—,partial,Python Literal types → Rust enums; needs audit for missing variants
+models,vsg_core/models/jobs.py,118,crates/vsg_core/src/models/jobs.rs,287,partial,Core structs present; needs field-by-field comparison
+models,vsg_core/models/media.py,27,crates/vsg_core/src/models/media.rs,157,complete,Rust is more detailed
+models,vsg_core/models/context_types.py,286,crates/vsg_core/src/orchestrator/types.rs,259,partial,Some TypedDicts missing (DriftFlags/SyncStability/etc)
+models,vsg_core/models/converters.py,98,,0,not_started,Model conversion utilities
+
+# ═══════════════════════════════════════════════════════════════
+# CONFIG — Settings persistence
+# ═══════════════════════════════════════════════════════════════
+config,vsg_core/config.py,575,crates/vsg_core/src/config/manager.rs,390,partial,Missing migration/legacy keys/full defaults/path resolution
+
+# ═══════════════════════════════════════════════════════════════
+# ANALYSIS — Audio correlation & sync detection
+# ═══════════════════════════════════════════════════════════════
+analysis,vsg_core/analysis/types.py,162,crates/vsg_core/src/analysis/types.rs,375,partial,Rust has more but needs comparison for missing Python types
+analysis,vsg_core/analysis/correlation/dense.py,513,,0,not_started,Dense GPU sliding window — core analysis engine
+analysis,vsg_core/analysis/correlation/gpu_backend.py,160,,0,not_started,GPU init & device management (tch-rs needed)
+analysis,vsg_core/analysis/correlation/gpu_correlation.py,213,,0,not_started,GPU peak extraction
+analysis,vsg_core/analysis/correlation/decode.py,199,crates/vsg_core/src/analysis/ffmpeg.rs,517,partial,Rust uses ffmpeg CLI; Python uses librosa/torchaudio
+analysis,vsg_core/analysis/correlation/confidence.py,68,,0,not_started,Confidence scoring
+analysis,vsg_core/analysis/correlation/filtering.py,90,crates/vsg_core/src/analysis/filtering.rs,332,partial,Rust has filtering but needs comparison
+analysis,vsg_core/analysis/correlation/registry.py,68,,0,not_started,Method registry system
+analysis,vsg_core/analysis/correlation/run.py,32,,0,not_started,Method resolution entry point
+analysis,vsg_core/analysis/correlation/methods/scc.py,52,crates/vsg_core/src/analysis/methods/scc.rs,328,partial,Core present; Rust is CPU-only
+analysis,vsg_core/analysis/correlation/methods/gcc_phat.py,53,crates/vsg_core/src/analysis/methods/gcc_phat.rs,291,partial,Core present; Rust is CPU-only
+analysis,vsg_core/analysis/correlation/methods/gcc_scot.py,61,crates/vsg_core/src/analysis/methods/gcc_scot.rs,230,partial,Core present; Rust is CPU-only
+analysis,vsg_core/analysis/correlation/methods/gcc_whiten.py,64,crates/vsg_core/src/analysis/methods/whitened.rs,283,partial,Core present; Rust is CPU-only
+analysis,vsg_core/analysis/correlation/methods/onset.py,80,,0,not_started,Onset detection correlation
+analysis,vsg_core/analysis/correlation/methods/spectrogram.py,87,,0,not_started,Spectrogram-based correlation
+analysis,vsg_core/analysis/delay_selection.py,367,crates/vsg_core/src/analysis/delay_selection/,770,partial,5 modes implemented; need field-by-field param comparison
+analysis,vsg_core/analysis/container_delays.py,192,,0,not_started,MKV container delay calculations
+analysis,vsg_core/analysis/drift_detection.py,613,,0,not_started,PAL/frame drift diagnosis
+analysis,vsg_core/analysis/global_shift.py,152,,0,not_started,Global shift calculation
+analysis,vsg_core/analysis/sync_stability.py,310,,0,not_started,Outlier detection & stability analysis
+analysis,vsg_core/analysis/track_selection.py,196,crates/vsg_core/src/analysis/tracks.rs,222,partial,Basic track handling; needs comparison
+analysis,vsg_core/analysis/source_separation.py,1559,,0,not_started,Demucs source separation wrapper
+analysis,vsg_core/analysis/videodiff.py,641,,0,not_started,VideoDiff external tool wrapper
+analysis,—,—,crates/vsg_core/src/analysis/analyzer.rs,876,rust_only,Main analyzer orchestrator (no direct Python equivalent — logic spread across steps)
+analysis,—,—,crates/vsg_core/src/analysis/peak_fit.rs,192,rust_only,Quadratic peak interpolation
+
+# ═══════════════════════════════════════════════════════════════
+# EXTRACTION — Track & attachment extraction
+# ═══════════════════════════════════════════════════════════════
+extraction,vsg_core/extraction/tracks.py,634,crates/vsg_core/src/extraction/tracks.rs,242,partial,Rust is simpler; Python has more track handling logic
+extraction,vsg_core/extraction/attachments.py,86,crates/vsg_core/src/extraction/attachments.rs,216,complete,Rust more detailed
+extraction,—,—,crates/vsg_core/src/extraction/probe.rs,680,rust_only,Probing (Python does this inline in tracks.py)
+extraction,—,—,crates/vsg_core/src/extraction/mkvextract.rs,380,rust_only,mkvextract wrapper (Python does inline)
+extraction,—,—,crates/vsg_core/src/extraction/types.rs,508,rust_only,Extraction types (Python uses dicts)
+
+# ═══════════════════════════════════════════════════════════════
+# CHAPTERS — Chapter processing
+# ═══════════════════════════════════════════════════════════════
+chapters,vsg_core/chapters/process.py,420,crates/vsg_core/src/chapters/processor.rs,353,partial,Core logic present; needs detail comparison
+chapters,vsg_core/chapters/keyframes.py,37,crates/vsg_core/src/chapters/snapper.rs,559,complete,Rust more comprehensive
+chapters,—,—,crates/vsg_core/src/chapters/parser.rs,375,rust_only,XML parsing (Python uses inline parsing)
+chapters,—,—,crates/vsg_core/src/chapters/shifter.rs,181,rust_only,Delay shifting (Python does inline)
+chapters,—,—,crates/vsg_core/src/chapters/extractor.rs,159,rust_only,Chapter extraction (Python does inline)
+
+# ═══════════════════════════════════════════════════════════════
+# MUX — MKV muxing
+# ═══════════════════════════════════════════════════════════════
+mux,vsg_core/mux/options_builder.py,257,crates/vsg_core/src/mux/options_builder.rs,290,partial,Missing preserved track handling
+
+# ═══════════════════════════════════════════════════════════════
+# ORCHESTRATOR — Pipeline execution
+# ═══════════════════════════════════════════════════════════════
+orchestrator,vsg_core/orchestrator/pipeline.py,204,crates/vsg_core/src/orchestrator/pipeline.rs,252,partial,Framework present; needs validation comparison
+orchestrator,vsg_core/orchestrator/validation.py,277,crates/vsg_core/src/orchestrator/errors.rs,201,partial,Rust has errors but missing validation logic
+orchestrator,vsg_core/orchestrator/steps/context.py,122,crates/vsg_core/src/orchestrator/types.rs,259,partial,Context present; missing some fields
+orchestrator,vsg_core/orchestrator/steps/analysis_step.py,1282,crates/vsg_core/src/orchestrator/steps/analyze.rs,621,partial,Half the size — missing multi-corr/drift/stability/source-sep
+orchestrator,vsg_core/orchestrator/steps/extract_step.py,377,crates/vsg_core/src/orchestrator/steps/extract.rs,492,partial,Core present; needs comparison
+orchestrator,vsg_core/orchestrator/steps/attachments_step.py,96,crates/vsg_core/src/orchestrator/steps/attachments.rs,157,complete,Looks complete
+orchestrator,vsg_core/orchestrator/steps/chapters_step.py,99,crates/vsg_core/src/orchestrator/steps/chapters.rs,336,complete,Rust more detailed
+orchestrator,vsg_core/orchestrator/steps/subtitles_step.py,189,crates/vsg_core/src/orchestrator/steps/subtitles.rs,108,stub,Placeholder only
+orchestrator,vsg_core/orchestrator/steps/audio_correction_step.py,194,crates/vsg_core/src/orchestrator/steps/audio_correction.rs,109,stub,Placeholder only
+orchestrator,vsg_core/orchestrator/steps/mux_step.py,37,crates/vsg_core/src/orchestrator/steps/mux.rs,461,complete,Rust more detailed
+
+# ═══════════════════════════════════════════════════════════════
+# PIPELINE COMPONENTS — Pipeline helpers
+# ═══════════════════════════════════════════════════════════════
+pipeline,vsg_core/pipeline.py,234,,0,not_started,JobPipeline orchestrator (high-level)
+pipeline,vsg_core/pipeline_components/log_manager.py,65,crates/vsg_core/src/logging/,804,partial,Rust has logging module; needs comparison
+pipeline,vsg_core/pipeline_components/tool_validator.py,40,,0,not_started,External tool validation
+pipeline,vsg_core/pipeline_components/sync_planner.py,73,,0,not_started,Sync job planning
+pipeline,vsg_core/pipeline_components/sync_executor.py,72,,0,not_started,Sync pipeline executor
+pipeline,vsg_core/pipeline_components/output_writer.py,81,,0,not_started,Final output writer
+pipeline,vsg_core/pipeline_components/result_auditor.py,46,,0,not_started,Result validation
+
+# ═══════════════════════════════════════════════════════════════
+# JOBS — Job queue & discovery
+# ═══════════════════════════════════════════════════════════════
+jobs,vsg_core/job_discovery.py,80,crates/vsg_core/src/jobs/discovery.rs,360,complete,Rust more comprehensive
+jobs,vsg_core/job_layouts/manager.py,201,crates/vsg_core/src/jobs/layout.rs,395,partial,Needs comparison
+jobs,vsg_core/job_layouts/persistence.py,78,crates/vsg_core/src/jobs/queue.rs,357,partial,Rust combines queue+persistence
+jobs,vsg_core/job_layouts/signature.py,93,crates/vsg_core/src/jobs/signature.rs,245,partial,Needs comparison
+jobs,vsg_core/job_layouts/validation.py,33,,0,not_started,Layout validation
+
+# ═══════════════════════════════════════════════════════════════
+# IO — Command runner
+# ═══════════════════════════════════════════════════════════════
+io,vsg_core/io/runner.py,164,,0,not_started,CommandRunner subprocess management
+
+# ═══════════════════════════════════════════════════════════════
+# LOGGING
+# ═══════════════════════════════════════════════════════════════
+logging,—,—,crates/vsg_core/src/logging/job_logger.rs,439,rust_only,Per-job logging (Python distributes this)
+logging,—,—,crates/vsg_core/src/logging/types.rs,128,rust_only,Log types
+logging,—,—,crates/vsg_core/src/logging/mod.rs,237,rust_only,App-level logging setup
+
+# ═══════════════════════════════════════════════════════════════
+# CORRECTION — Audio stepping & drift correction
+# ═══════════════════════════════════════════════════════════════
+correction,vsg_core/correction/linear.py,178,,0,not_started,Linear drift correction
+correction,vsg_core/correction/pal.py,110,,0,not_started,PAL speed correction
+correction,vsg_core/correction/stepping/run.py,421,,0,not_started,Stepping pipeline runner
+correction,vsg_core/correction/stepping/boundary_refiner.py,688,,0,not_started,Segment boundary refinement
+correction,vsg_core/correction/stepping/audio_assembly.py,402,,0,not_started,Audio segment assembly
+correction,vsg_core/correction/stepping/qa_check.py,186,,0,not_started,Quality assurance checks
+correction,vsg_core/correction/stepping/edl_builder.py,132,,0,not_started,EDL builder
+correction,vsg_core/correction/stepping/data_io.py,107,,0,not_started,Stepping data I/O
+correction,vsg_core/correction/stepping/types.py,93,,0,not_started,Stepping types
+correction,vsg_core/correction/stepping/timeline.py,28,,0,not_started,Timeline utilities
+
+# ═══════════════════════════════════════════════════════════════
+# SUBTITLES — Parsing, sync, processing
+# ═══════════════════════════════════════════════════════════════
+subtitles,vsg_core/subtitles/data.py,1442,,0,not_started,SubtitleData universal container (LARGE)
+subtitles,vsg_core/subtitles/edit_plan.py,874,,0,not_started,Non-destructive edit plan (LARGE)
+subtitles,vsg_core/subtitles/track_processor.py,548,,0,not_started,Track processing pipeline
+subtitles,vsg_core/subtitles/sync_dispatcher.py,403,,0,not_started,Sync method dispatch
+subtitles,vsg_core/subtitles/sync_modes.py,148,,0,not_started,Sync mode plugin system
+subtitles,vsg_core/subtitles/sync_utils.py,58,,0,not_started,Sync utilities
+subtitles,vsg_core/subtitles/style_engine.py,390,,0,not_started,ASS style manipulation
+subtitles,vsg_core/subtitles/checkpoint_selection.py,97,,0,not_started,Frame checkpoint selection
+subtitles,vsg_core/subtitles/parsers/srt_parser.py,289,,0,not_started,SRT parser
+subtitles,vsg_core/subtitles/parsers/ass_parser.py,349,,0,not_started,ASS/SSA parser
+subtitles,vsg_core/subtitles/writers/srt_writer.py,133,,0,not_started,SRT writer
+subtitles,vsg_core/subtitles/writers/ass_writer.py,422,,0,not_started,ASS/SSA writer
+subtitles,vsg_core/subtitles/operations/style_ops.py,781,,0,not_started,Style operations
+subtitles,vsg_core/subtitles/operations/stepping.py,210,,0,not_started,Subtitle stepping operations
+subtitles,vsg_core/subtitles/diagnostics/timestamp_debug.py,97,,0,not_started,Timestamp debugging
+
+# ═══════════════════════════════════════════════════════════════
+# SUBTITLES — Frame utilities
+# ═══════════════════════════════════════════════════════════════
+subtitles_frame,vsg_core/subtitles/frame_utils/video_reader.py,910,,0,not_started,Video frame reading (LARGE)
+subtitles_frame,vsg_core/subtitles/frame_utils/video_properties.py,809,,0,not_started,Video property probing (LARGE)
+subtitles_frame,vsg_core/subtitles/frame_utils/visual_verify.py,1113,,0,not_started,Visual verification (LARGE)
+subtitles_frame,vsg_core/subtitles/frame_utils/frame_audit.py,605,,0,not_started,Frame validation
+subtitles_frame,vsg_core/subtitles/frame_utils/frame_hashing.py,398,,0,not_started,Frame hashing (dHash/pHash)
+subtitles_frame,vsg_core/subtitles/frame_utils/timing.py,288,,0,not_started,Frame timing calculations
+subtitles_frame,vsg_core/subtitles/frame_utils/surgical_rounding.py,258,,0,not_started,Precise timing rounding
+
+# ═══════════════════════════════════════════════════════════════
+# SUBTITLES — OCR system
+# ═══════════════════════════════════════════════════════════════
+ocr,vsg_core/subtitles/ocr/engine.py,530,,0,not_started,OCR main engine
+ocr,vsg_core/subtitles/ocr/pipeline.py,949,,0,not_started,OCR pipeline (LARGE)
+ocr,vsg_core/subtitles/ocr/backends.py,1140,,0,not_started,OCR backends Tesseract/EasyOCR/Paddle (LARGE)
+ocr,vsg_core/subtitles/ocr/vobsub parser,939,,0,not_started,VobSub parsing (LARGE)
+ocr,vsg_core/subtitles/ocr/postprocess.py,693,,0,not_started,OCR post-processing
+ocr,vsg_core/subtitles/ocr/preprocessing.py,381,,0,not_started,Image preprocessing
+ocr,vsg_core/subtitles/ocr/subtitle_edit.py,1056,,0,not_started,Subtitle editing for OCR (LARGE)
+ocr,vsg_core/subtitles/ocr/debug.py,563,,0,not_started,OCR debug utilities
+ocr,vsg_core/subtitles/ocr/output.py,393,,0,not_started,OCR output formatting
+ocr,vsg_core/subtitles/ocr/report.py,335,,0,not_started,OCR reporting
+ocr,vsg_core/subtitles/ocr/wrapper.py,271,,0,not_started,Unified OCR wrapper
+ocr,vsg_core/subtitles/ocr/dictionaries.py,806,,0,not_started,Character dictionaries
+ocr,vsg_core/subtitles/ocr/romaji_dictionary.py,983,,0,not_started,Japanese romaji dictionary
+ocr,vsg_core/subtitles/ocr/word_lists.py,767,,0,not_started,Common word lists
+ocr,vsg_core/subtitles/ocr/unified_subprocess.py,107,,0,not_started,Unified subprocess
+ocr,vsg_core/subtitles/ocr/preview_subprocess.py,60,,0,not_started,Preview subprocess
+
+# ═══════════════════════════════════════════════════════════════
+# SUBTITLES — Video-verified sync plugins
+# ═══════════════════════════════════════════════════════════════
+video_verified,vsg_core/subtitles/sync_mode_plugins/time_based.py,118,,0,not_started,Time-based sync plugin
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/plugin.py,418,,0,not_started,Video-verified plugin interface
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/neural_matcher.py,672,,0,not_started,Neural frame matching (LARGE — needs tch-rs/ort)
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/matcher.py,523,,0,not_started,Classic frame matching
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/preprocessing.py,588,,0,not_started,Frame preprocessing
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/quality.py,476,,0,not_started,Quality assessment
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/verification.py,199,,0,not_started,Verification system
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/offset.py,188,,0,not_started,Offset calculation
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/neural_subprocess.py,175,,0,not_started,Neural subprocess
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/isc_model.py,100,,0,not_started,ISC model management (needs ort)
+video_verified,vsg_core/subtitles/sync_mode_plugins/video_verified/candidates.py,64,,0,not_started,Candidate generation
+
+# ═══════════════════════════════════════════════════════════════
+# POSTPROCESS — Result validation & auditing
+# ═══════════════════════════════════════════════════════════════
+postprocess,vsg_core/postprocess/final_auditor.py,439,,0,not_started,Final audit runner
+postprocess,vsg_core/postprocess/finalizer.py,120,,0,not_started,Post-mux finalizer
+postprocess,vsg_core/postprocess/chapter_backup.py,116,,0,not_started,Chapter backup
+postprocess,vsg_core/postprocess/auditors/base.py,244,,0,not_started,Base auditor class
+postprocess,vsg_core/postprocess/auditors/audio_sync.py,473,,0,not_started,Audio sync auditor
+postprocess,vsg_core/postprocess/auditors/chapters.py,353,,0,not_started,Chapter auditor
+postprocess,vsg_core/postprocess/auditors/subtitle_formats.py,321,,0,not_started,Subtitle format auditor
+postprocess,vsg_core/postprocess/auditors/video_metadata.py,301,,0,not_started,Video metadata auditor
+postprocess,vsg_core/postprocess/auditors/stepping_correction.py,261,,0,not_started,Stepping correction auditor
+postprocess,vsg_core/postprocess/auditors/audio_quality.py,148,,0,not_started,Audio quality auditor
+postprocess,vsg_core/postprocess/auditors/attachments.py,138,,0,not_started,Attachment auditor
+postprocess,vsg_core/postprocess/auditors/audio_channels.py,130,,0,not_started,Audio channel auditor
+postprocess,vsg_core/postprocess/auditors/audio_object_based.py,127,,0,not_started,Object-based audio auditor
+postprocess,vsg_core/postprocess/auditors/drift_correction.py,126,,0,not_started,Drift correction auditor
+postprocess,vsg_core/postprocess/auditors/neural_confidence.py,90,,0,not_started,Neural confidence auditor
+postprocess,vsg_core/postprocess/auditors/track_order.py,71,,0,not_started,Track order auditor
+postprocess,vsg_core/postprocess/auditors/track_flags.py,86,,0,not_started,Track flags auditor
+postprocess,vsg_core/postprocess/auditors/dolby_vision.py,86,,0,not_started,Dolby Vision auditor
+postprocess,vsg_core/postprocess/auditors/subtitle_clamping.py,80,,0,not_started,Subtitle clamping auditor
+postprocess,vsg_core/postprocess/auditors/codec_integrity.py,70,,0,not_started,Codec integrity auditor
+postprocess,vsg_core/postprocess/auditors/frame_audit.py,69,,0,not_started,Frame audit auditor
+postprocess,vsg_core/postprocess/auditors/global_shift.py,66,,0,not_started,Global shift auditor
+postprocess,vsg_core/postprocess/auditors/track_names.py,46,,0,not_started,Track names auditor
+postprocess,vsg_core/postprocess/auditors/language_tags.py,43,,0,not_started,Language tags auditor
+
+# ═══════════════════════════════════════════════════════════════
+# AUDIT — Audit trail
+# ═══════════════════════════════════════════════════════════════
+audit,vsg_core/audit/trail.py,529,,0,not_started,Audit trail logging
+
+# ═══════════════════════════════════════════════════════════════
+# REPORTING — Reports & debug output
+# ═══════════════════════════════════════════════════════════════
+reporting,vsg_core/reporting/report_writer.py,415,,0,not_started,Report generation
+reporting,vsg_core/reporting/debug_manager.py,208,,0,not_started,Debug output manager
+reporting,vsg_core/reporting/debug_paths.py,177,,0,not_started,Debug path management
+
+# ═══════════════════════════════════════════════════════════════
+# MISC — Utility modules
+# ═══════════════════════════════════════════════════════════════
+misc,vsg_core/font_manager.py,508,,0,not_started,Font handling
+misc,vsg_core/favorite_colors.py,209,,0,not_started,UI color palettes
+misc,vsg_core/system/gpu_env.py,23,,0,not_started,GPU environment detection
+
+# ═══════════════════════════════════════════════════════════════
+# UI — Qt GUI (needs CXX-Qt rewrite)
+# ═══════════════════════════════════════════════════════════════
+ui,vsg_qt/main_window/window.py,155,crates/vsg_ui/src/app.rs,887,needs_rewrite,GTK4 → CXX-Qt
+ui,vsg_qt/main_window/controller.py,288,crates/vsg_ui/src/app.rs,—,needs_rewrite,Logic mixed into app.rs; GTK4 → CXX-Qt
+ui,vsg_qt/manual_selection_dialog/ui.py,1187,crates/vsg_ui/src/manual_selection.rs,1998,needs_rewrite,GTK4 → CXX-Qt
+ui,vsg_qt/manual_selection_dialog/logic.py,153,crates/vsg_ui/src/manual_selection.rs,—,needs_rewrite,Mixed into manual_selection.rs
+ui,vsg_qt/manual_selection_dialog/widgets.py,246,,0,not_started,Custom widgets
+ui,vsg_qt/job_queue_dialog/ui.py,188,crates/vsg_ui/src/job_queue.rs,732,needs_rewrite,GTK4 → CXX-Qt
+ui,vsg_qt/job_queue_dialog/logic.py,845,,0,not_started,Job queue logic (LARGE)
+ui,vsg_qt/options_dialog/ui.py,165,crates/vsg_ui/src/settings.rs,780,needs_rewrite,GTK4 → CXX-Qt
+ui,vsg_qt/options_dialog/tabs.py,2165,,0,not_started,Settings tabs (VERY LARGE)
+ui,vsg_qt/options_dialog/logic.py,137,,0,not_started,Settings logic
+ui,vsg_qt/options_dialog/model_manager_dialog.py,496,,0,not_started,ML model manager dialog
+ui,vsg_qt/add_job_dialog/ui.py,167,crates/vsg_ui/src/add_job_dialog.rs,314,needs_rewrite,GTK4 → CXX-Qt
+ui,vsg_qt/worker/runner.py,152,,0,not_started,Background job worker
+ui,vsg_qt/worker/signals.py,11,,0,not_started,Signal definitions
+ui,vsg_qt/track_widget/ui.py,157,,0,not_started,Track display widget
+ui,vsg_qt/track_widget/logic.py,290,,0,not_started,Track widget logic
+ui,vsg_qt/track_widget/helpers.py,62,,0,not_started,Track widget helpers
+ui,vsg_qt/track_settings_dialog/ui.py,135,,0,not_started,Per-track settings UI
+ui,vsg_qt/track_settings_dialog/logic.py,116,,0,not_started,Per-track settings logic
+ui,vsg_qt/resample_dialog/ui.py,98,,0,not_started,Resample dialog
+ui,vsg_qt/font_manager_dialog/ui.py,485,,0,not_started,Font manager dialog
+ui,vsg_qt/ocr_dictionary_dialog/ui.py,1615,,0,not_started,OCR dictionary editor (VERY LARGE)
+ui,vsg_qt/favorites_dialog/ui.py,271,,0,not_started,Favorites dialog
+ui,vsg_qt/source_settings_dialog/dialog.py,231,,0,not_started,Source settings dialog
+ui,vsg_qt/sync_exclusion_dialog/ui.py,285,,0,not_started,Sync exclusion zones dialog
+ui,vsg_qt/report_dialogs/report_viewer.py,417,,0,not_started,Report viewer
+ui,vsg_qt/report_dialogs/batch_completion_dialog.py,247,,0,not_started,Batch completion dialog
+ui,vsg_qt/subtitle_editor/editor_window.py,383,,0,not_started,Subtitle editor window
+ui,vsg_qt/subtitle_editor/events_table.py,552,,0,not_started,Events table
+ui,vsg_qt/subtitle_editor/video_panel.py,241,,0,not_started,Video panel
+ui,vsg_qt/subtitle_editor/tab_panel.py,197,,0,not_started,Tab panel
+ui,vsg_qt/subtitle_editor/subprocess_launcher.py,140,,0,not_started,Subprocess launcher
+ui,vsg_qt/subtitle_editor/player/player_thread.py,367,,0,not_started,Video player thread
+ui,vsg_qt/subtitle_editor/state/editor_state.py,506,,0,not_started,Editor state management
+ui,vsg_qt/subtitle_editor/state/undo_manager.py,131,,0,not_started,Undo system
+ui,vsg_qt/subtitle_editor/tabs/styles_tab.py,627,,0,not_started,Styles tab
+ui,vsg_qt/subtitle_editor/tabs/fonts_tab.py,489,,0,not_started,Fonts tab
+ui,vsg_qt/subtitle_editor/tabs/filtering_tab.py,314,,0,not_started,Filtering tab
+ui,vsg_qt/subtitle_editor/tabs/base_tab.py,111,,0,not_started,Base tab class
+ui,vsg_qt/subtitle_editor/utils/time_format.py,105,,0,not_started,Time formatting
+ui,vsg_qt/subtitle_editor/utils/cps.py,98,,0,not_started,Characters per second
